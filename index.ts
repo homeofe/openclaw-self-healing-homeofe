@@ -132,6 +132,8 @@ export default function register(api: any) {
   const cooldownMinutes: number = cfg.cooldownMinutes ?? 300;
   const stateFile = expandHome(cfg.stateFile ?? "~/.openclaw/workspace/memory/self-heal-state.json");
   const sessionsFile = expandHome(cfg.sessionsFile ?? "~/.openclaw/agents/main/sessions/sessions.json");
+  const configFile = expandHome(cfg.configFile ?? "~/.openclaw/openclaw.json");
+  const configBackupsDir = expandHome(cfg.configBackupsDir ?? "~/.openclaw/backups/openclaw.json");
 
   const autoFix = cfg.autoFix ?? {};
   const patchPins: boolean = autoFix.patchSessionPins !== false;
@@ -146,6 +148,28 @@ export default function register(api: any) {
   const pluginDisableCooldownSec: number = cfg?.autoFix?.pluginDisableCooldownSec ?? 3600;
 
   api.logger?.info?.(`[self-heal] enabled. order=${modelOrder.join(" -> ")}`);
+
+  function isConfigValid(): { ok: boolean; error?: string } {
+    try {
+      const raw = fs.readFileSync(configFile, "utf-8");
+      JSON.parse(raw);
+      return { ok: true };
+    } catch (e: any) {
+      return { ok: false, error: e?.message ?? String(e) };
+    }
+  }
+
+  function backupConfig(reason: string) {
+    try {
+      fs.mkdirSync(configBackupsDir, { recursive: true });
+      const ts = new Date().toISOString().replace(/[:.]/g, "-");
+      const out = path.join(configBackupsDir, `openclaw.json.${ts}.bak`);
+      fs.copyFileSync(configFile, out);
+      api.logger?.info?.(`[self-heal] backed up openclaw.json (${reason}) -> ${out}`);
+    } catch (e: any) {
+      api.logger?.warn?.(`[self-heal] failed to backup openclaw.json: ${e?.message ?? String(e)}`);
+    }
+  }
 
   // Heal after an LLM failure.
   api.on("agent_end", (event: any, ctx: any) => {
@@ -235,9 +259,16 @@ export default function register(api: any) {
                 api.logger?.warn?.(
                   `[self-heal] WhatsApp appears disconnected (streak=${state.whatsapp!.disconnectStreak}). Restarting gateway.`
                 );
-                await runCmd(api, "openclaw gateway restart", 60000);
-                state.whatsapp!.lastRestartAt = nowSec();
-                state.whatsapp!.disconnectStreak = 0;
+                // Guardrail: never restart if openclaw.json is invalid
+                const v = isConfigValid();
+                if (!v.ok) {
+                  api.logger?.error?.(`[self-heal] NOT restarting gateway: openclaw.json invalid: ${v.error}`);
+                } else {
+                  backupConfig("pre-gateway-restart");
+                  await runCmd(api, "openclaw gateway restart", 60000);
+                  state.whatsapp!.lastRestartAt = nowSec();
+                  state.whatsapp!.disconnectStreak = 0;
+                }
               }
             }
           }
@@ -260,9 +291,16 @@ export default function register(api: any) {
               state.cron!.failCounts![id] = isFail ? prev + 1 : 0;
 
               if (isFail && state.cron!.failCounts![id] >= cronFailThreshold) {
-                // Disable the cron
-                api.logger?.warn?.(`[self-heal] Disabling failing cron ${name} (${id}).`);
-                await runCmd(api, `openclaw cron edit ${id} --disable`, 15000);
+                // Guardrail: do not touch crons if config is invalid
+                const v = isConfigValid();
+                if (!v.ok) {
+                  api.logger?.error?.(`[self-heal] NOT disabling cron: openclaw.json invalid: ${v.error}`);
+                } else {
+                  // Disable the cron
+                  api.logger?.warn?.(`[self-heal] Disabling failing cron ${name} (${id}).`);
+                  backupConfig("pre-cron-disable");
+                  await runCmd(api, `openclaw cron edit ${id} --disable`, 15000);
+                }
 
                 // Create issue, but rate limit issue creation
                 const lastIssueAt = state.cron!.lastIssueCreatedAt![id] ?? 0;

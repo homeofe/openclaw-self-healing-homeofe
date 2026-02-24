@@ -60,3 +60,16 @@ openclaw gateway restart
 ## Notes
 
 Infrastructure changes remain ask-first.
+
+## Critical Guardrail: openclaw.json validation
+
+This plugin treats `~/.openclaw/openclaw.json` as a boot-critical file.
+
+Before any self-heal action that could restart the gateway or change cron/plugin state, it verifies:
+- the config file exists
+- it is valid JSON
+
+If the config is invalid, the plugin will refuse to restart the gateway to avoid restart loops.
+
+It also creates timestamped backups before restarts or disruptive changes:
+`~/.openclaw/backups/openclaw.json/openclaw.json.<timestamp>.bak`
