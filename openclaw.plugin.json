@@ -1,7 +1,7 @@
 {
   "id": "openclaw-self-healing",
   "name": "OpenClaw Self Healing",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Self-healing health checks + guardrails + auto-fix for reversible failures (rate limits, auth errors, stuck session pins).",
   "configSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
