@@ -11,6 +11,18 @@ function expandHome(p: string): string {
 
 type State = {
   limited: Record<string, { lastHitAt: number; nextAvailableAt: number; reason?: string }>;
+  whatsapp?: {
+    lastSeenConnectedAt?: number;
+    lastRestartAt?: number;
+    disconnectStreak?: number;
+  };
+  cron?: {
+    failCounts?: Record<string, number>; // job id -> consecutive failures
+    lastIssueCreatedAt?: Record<string, number>; // job id -> timestamp
+  };
+  plugins?: {
+    lastDisableAt?: Record<string, number>; // plugin id -> timestamp
+  };
 };
 
 function nowSec() {
@@ -22,9 +34,15 @@ function loadState(p: string): State {
     const raw = fs.readFileSync(p, "utf-8");
     const d = JSON.parse(raw);
     if (!d.limited) d.limited = {};
+    if (!d.whatsapp) d.whatsapp = {};
+    if (!d.cron) d.cron = {};
+    if (!d.cron.failCounts) d.cron.failCounts = {};
+    if (!d.cron.lastIssueCreatedAt) d.cron.lastIssueCreatedAt = {};
+    if (!d.plugins) d.plugins = {};
+    if (!d.plugins.lastDisableAt) d.plugins.lastDisableAt = {};
     return d;
   } catch {
-    return { limited: {} };
+    return { limited: {}, whatsapp: {}, cron: { failCounts: {}, lastIssueCreatedAt: {} }, plugins: { lastDisableAt: {} } };
   }
 }
 
@@ -77,6 +95,31 @@ function patchSessionModel(sessionsFile: string, sessionKey: string, model: stri
   }
 }
 
+async function runCmd(api: any, cmd: string, timeoutMs = 15000): Promise<{ ok: boolean; stdout: string; stderr: string; code?: number }> {
+  try {
+    const res = await api.runtime.system.runCommandWithTimeout({
+      command: ["bash", "-lc", cmd],
+      timeoutMs,
+    });
+    return {
+      ok: res.exitCode === 0,
+      stdout: String(res.stdout ?? ""),
+      stderr: String(res.stderr ?? ""),
+      code: res.exitCode,
+    };
+  } catch (e: any) {
+    return { ok: false, stdout: "", stderr: e?.message ?? String(e) };
+  }
+}
+
+function safeJsonParse<T>(s: string): T | undefined {
+  try {
+    return JSON.parse(s) as T;
+  } catch {
+    return undefined;
+  }
+}
+
 export default function register(api: any) {
   const cfg = (api.pluginConfig ?? {}) as any;
   if (cfg.enabled === false) return;
@@ -92,6 +135,15 @@ export default function register(api: any) {
 
   const autoFix = cfg.autoFix ?? {};
   const patchPins: boolean = autoFix.patchSessionPins !== false;
+  const disableFailingCrons: boolean = autoFix.disableFailingCrons === true;
+  const disableFailingPlugins: boolean = autoFix.disableFailingPlugins === true;
+
+  const whatsappRestartEnabled: boolean = cfg?.autoFix?.restartWhatsappOnDisconnect !== false;
+  const whatsappDisconnectThreshold: number = cfg?.autoFix?.whatsappDisconnectThreshold ?? 2;
+  const whatsappMinRestartIntervalSec: number = cfg?.autoFix?.whatsappMinRestartIntervalSec ?? 300;
+  const cronFailThreshold: number = cfg?.autoFix?.cronFailThreshold ?? 3;
+  const issueCooldownSec: number = cfg?.autoFix?.issueCooldownSec ?? 6 * 3600;
+  const pluginDisableCooldownSec: number = cfg?.autoFix?.pluginDisableCooldownSec ?? 3600;
 
   api.logger?.info?.(`[self-heal] enabled. order=${modelOrder.join(" -> ")}`);
 
@@ -137,12 +189,143 @@ export default function register(api: any) {
 
     const state = loadState(stateFile);
     const hitAt = nowSec();
-    state.limited[modelOrder[0]] = { lastHitAt: hitAt, nextAvailableAt: hitAt + cooldownMinutes * 60, reason: "outbound error observed" };
+    state.limited[modelOrder[0]] = {
+      lastHitAt: hitAt,
+      nextAvailableAt: hitAt + cooldownMinutes * 60,
+      reason: "outbound error observed",
+    };
     saveState(stateFile, state);
 
     const fallback = pickFallback(modelOrder, state);
     if (patchPins && ctx?.sessionKey) {
       patchSessionModel(sessionsFile, ctx.sessionKey, fallback, api.logger);
     }
+  });
+
+  // Background monitor: WhatsApp disconnects, failing crons, failing plugins.
+  api.registerService({
+    id: "self-heal-monitor",
+    start: async () => {
+      let timer: NodeJS.Timeout | undefined;
+
+      const tick = async () => {
+        const state = loadState(stateFile);
+
+        // --- WhatsApp disconnect self-heal ---
+        if (whatsappRestartEnabled) {
+          const st = await runCmd(api, "openclaw channels status --json", 15000);
+          if (st.ok) {
+            const parsed = safeJsonParse<any>(st.stdout);
+            const wa = parsed?.channels?.whatsapp;
+            const connected = wa?.status === "connected" || wa?.connected === true;
+
+            if (connected) {
+              state.whatsapp!.lastSeenConnectedAt = nowSec();
+              state.whatsapp!.disconnectStreak = 0;
+            } else {
+              state.whatsapp!.disconnectStreak = (state.whatsapp!.disconnectStreak ?? 0) + 1;
+
+              const lastRestartAt = state.whatsapp!.lastRestartAt ?? 0;
+              const since = nowSec() - lastRestartAt;
+              const shouldRestart =
+                state.whatsapp!.disconnectStreak >= whatsappDisconnectThreshold &&
+                since >= whatsappMinRestartIntervalSec;
+
+              if (shouldRestart) {
+                api.logger?.warn?.(
+                  `[self-heal] WhatsApp appears disconnected (streak=${state.whatsapp!.disconnectStreak}). Restarting gateway.`
+                );
+                await runCmd(api, "openclaw gateway restart", 60000);
+                state.whatsapp!.lastRestartAt = nowSec();
+                state.whatsapp!.disconnectStreak = 0;
+              }
+            }
+          }
+        }
+
+        // --- Cron failure self-heal ---
+        if (disableFailingCrons) {
+          const res = await runCmd(api, "openclaw cron list --json", 15000);
+          if (res.ok) {
+            const parsed = safeJsonParse<any>(res.stdout);
+            const jobs: any[] = parsed?.jobs ?? [];
+            for (const job of jobs) {
+              const id = job.id;
+              const name = job.name;
+              const lastStatus = job?.state?.lastStatus;
+              const lastError = String(job?.state?.lastError ?? "");
+
+              const isFail = lastStatus === "error";
+              const prev = state.cron!.failCounts![id] ?? 0;
+              state.cron!.failCounts![id] = isFail ? prev + 1 : 0;
+
+              if (isFail && state.cron!.failCounts![id] >= cronFailThreshold) {
+                // Disable the cron
+                api.logger?.warn?.(`[self-heal] Disabling failing cron ${name} (${id}).`);
+                await runCmd(api, `openclaw cron edit ${id} --disable`, 15000);
+
+                // Create issue, but rate limit issue creation
+                const lastIssueAt = state.cron!.lastIssueCreatedAt![id] ?? 0;
+                if (nowSec() - lastIssueAt >= issueCooldownSec) {
+                  const body = [
+                    `Cron job failed repeatedly and was disabled by openclaw-self-healing.`,
+                    ``,
+                    `Name: ${name}`,
+                    `ID: ${id}`,
+                    `Consecutive failures: ${state.cron!.failCounts![id]}`,
+                    `Last error:`,
+                    "```",
+                    lastError.slice(0, 1200),
+                    "```",
+                  ].join("\n");
+
+                  // Issue goes to this repo by default
+                  await runCmd(
+                    api,
+                    `gh issue create -R homeofe/openclaw-self-healing --title "Cron disabled: ${name}" --body ${JSON.stringify(body)} --label security`,
+                    20000
+                  );
+                  state.cron!.lastIssueCreatedAt![id] = nowSec();
+                }
+
+                state.cron!.failCounts![id] = 0;
+              }
+            }
+          }
+        }
+
+        // --- Plugin error rollback (disable plugin) ---
+        if (disableFailingPlugins) {
+          const res = await runCmd(api, "openclaw plugins list", 15000);
+          if (res.ok) {
+            // Heuristic: look for lines containing 'error' or 'crash'
+            const lines = res.stdout.split("\n");
+            for (const ln of lines) {
+              if (!ln.toLowerCase().includes("error")) continue;
+              // No robust parsing available in plain output. Use a conservative approach:
+              // if we see our own plugin listed with error, do not disable others.
+            }
+          }
+          // TODO: when openclaw provides plugins list --json, parse and disable any status=error.
+        }
+
+        saveState(stateFile, state);
+      };
+
+      // tick every 60s
+      timer = setInterval(() => {
+        tick().catch((e) => api.logger?.error?.(`[self-heal] monitor tick failed: ${e?.message ?? String(e)}`));
+      }, 60_000);
+
+      // run once immediately
+      tick().catch((e) => api.logger?.error?.(`[self-heal] monitor start tick failed: ${e?.message ?? String(e)}`));
+
+      // store timer for stop
+      (api as any).__selfHealTimer = timer;
+    },
+    stop: async () => {
+      const t: NodeJS.Timeout | undefined = (api as any).__selfHealTimer;
+      if (t) clearInterval(t);
+    },
   });
 }

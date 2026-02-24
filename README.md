@@ -2,17 +2,26 @@
 
 OpenClaw plugin that improves resilience by automatically fixing reversible failures.
 
-## What it can heal (v0.1)
+## What it can heal (v0.2)
 
 Implemented now:
-- Detect rate limit / quota / auth-scope failures
-- Put the affected model into cooldown
-- Patch pinned session model overrides to a safe fallback (prevents endless `API rate limit reached` loops)
 
-Planned self-heal repairs (next):
-- If WhatsApp briefly disconnects: restart the gateway, but only when safe
-- If cron jobs fail repeatedly: disable + notify + create a GitHub issue
-- If plugin install errors occur: rollback (disable the plugin) and only then continue
+- Model outage healing
+  - Detect rate limit / quota / auth-scope failures
+  - Put the affected model into cooldown
+  - Patch pinned session model overrides to a safe fallback (prevents endless `API rate limit reached` loops)
+
+- WhatsApp disconnect healing
+  - If WhatsApp appears disconnected repeatedly: restart the gateway
+  - Guardrails: streak threshold + minimum restart interval
+
+- Cron failure healing (optional)
+  - If a cron job fails repeatedly: disable it
+  - Create a GitHub issue with last error context (rate limited)
+
+Not implemented yet (next):
+- Plugin install error rollback (disable plugin) based on structured plugin status
+  - Waiting for `openclaw plugins list --json` or an equivalent stable API
 
 ## Install (dev)
 

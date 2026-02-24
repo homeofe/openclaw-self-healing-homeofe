@@ -1,7 +1,7 @@
 {
   "id": "openclaw-self-healing",
   "name": "OpenClaw Self Healing",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Self-healing health checks + guardrails + auto-fix for reversible failures (rate limits, auth errors, stuck session pins).",
   "configSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
@@ -27,7 +27,13 @@
         "properties": {
           "patchSessionPins": { "type": "boolean", "default": true },
           "disableFailingPlugins": { "type": "boolean", "default": false },
-          "disableFailingCrons": { "type": "boolean", "default": false }
+          "disableFailingCrons": { "type": "boolean", "default": false },
+          "restartWhatsappOnDisconnect": { "type": "boolean", "default": true },
+          "whatsappDisconnectThreshold": { "type": "number", "default": 2, "minimum": 1, "maximum": 10 },
+          "whatsappMinRestartIntervalSec": { "type": "number", "default": 300, "minimum": 60 },
+          "cronFailThreshold": { "type": "number", "default": 3, "minimum": 1, "maximum": 20 },
+          "issueCooldownSec": { "type": "number", "default": 21600, "minimum": 300 },
+          "pluginDisableCooldownSec": { "type": "number", "default": 3600, "minimum": 60 }
         }
       }
     }
