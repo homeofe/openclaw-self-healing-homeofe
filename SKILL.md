@@ -16,7 +16,7 @@ Self-healing extension for OpenClaw.
 ## Install
 
 ```bash
-clawhub install openclaw-self-healing
+clawhub install openclaw-self-healing-homeofe
 ```
 
 ## Notes
