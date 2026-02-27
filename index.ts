@@ -2,14 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
-function expandHome(p: string): string {
+export function expandHome(p: string): string {
   if (!p) return p;
   if (p === "~") return os.homedir();
   if (p.startsWith("~/")) return path.join(os.homedir(), p.slice(2));
   return p;
 }
 
-type State = {
+export type State = {
   limited: Record<string, { lastHitAt: number; nextAvailableAt: number; reason?: string }>;
   pendingBackups?: Record<string, { createdAt: number; reason: string }>; // filePath -> meta
   whatsapp?: {
@@ -26,11 +26,11 @@ type State = {
   };
 };
 
-function nowSec() {
+export function nowSec() {
   return Math.floor(Date.now() / 1000);
 }
 
-function loadState(p: string): State {
+export function loadState(p: string): State {
   try {
     const raw = fs.readFileSync(p, "utf-8");
     const d = JSON.parse(raw);
@@ -48,18 +48,18 @@ function loadState(p: string): State {
   }
 }
 
-function saveState(p: string, s: State) {
+export function saveState(p: string, s: State) {
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, JSON.stringify(s, null, 2));
 }
 
-function isRateLimitLike(err?: string): boolean {
+export function isRateLimitLike(err?: string): boolean {
   if (!err) return false;
   const s = err.toLowerCase();
   return s.includes("rate limit") || s.includes("quota") || s.includes("429") || s.includes("resource_exhausted");
 }
 
-function isAuthScopeLike(err?: string): boolean {
+export function isAuthScopeLike(err?: string): boolean {
   if (!err) return false;
   const s = err.toLowerCase();
   return (
@@ -71,7 +71,7 @@ function isAuthScopeLike(err?: string): boolean {
   );
 }
 
-function pickFallback(modelOrder: string[], state: State): string {
+export function pickFallback(modelOrder: string[], state: State): string {
   const t = nowSec();
   for (const m of modelOrder) {
     const lim = state.limited[m];
@@ -81,7 +81,7 @@ function pickFallback(modelOrder: string[], state: State): string {
   return modelOrder[modelOrder.length - 1];
 }
 
-function patchSessionModel(sessionsFile: string, sessionKey: string, model: string, logger: any): boolean {
+export function patchSessionModel(sessionsFile: string, sessionKey: string, model: string, logger: any): boolean {
   try {
     const raw = fs.readFileSync(sessionsFile, "utf-8");
     const data = JSON.parse(raw);
@@ -114,7 +114,7 @@ async function runCmd(api: any, cmd: string, timeoutMs = 15000): Promise<{ ok: b
   }
 }
 
-function safeJsonParse<T>(s: string): T | undefined {
+export function safeJsonParse<T>(s: string): T | undefined {
   try {
     return JSON.parse(s) as T;
   } catch {

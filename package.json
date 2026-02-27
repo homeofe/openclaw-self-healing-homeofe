@@ -3,5 +3,16 @@
   "version": "0.2.4",
   "private": true,
   "type": "module",
-  "openclaw": { "extensions": ["./index.ts"] }
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "vitest": "^4.0.18"
+  }
 }
