@@ -317,6 +317,15 @@ export default function register(api: any) {
     state.limited[key] = { lastHitAt: hitAt, nextAvailableAt: nextAvail, reason: err?.slice(0, 160) };
     saveState(config.stateFile, state);
 
+    api.emit?.("self-heal:model-cooldown", {
+      model: key,
+      reason: err?.slice(0, 160),
+      cooldownSec: nextAvail - hitAt,
+      nextAvailableAt: nextAvail,
+      trigger: "agent_end",
+      dryRun: config.dryRun,
+    });
+
     const fallback = pickFallback(config.modelOrder, state);
 
     if (config.patchPins && ctx?.sessionKey && fallback && fallback !== pinnedModel) {
@@ -325,6 +334,13 @@ export default function register(api: any) {
       } else {
         patchSessionModel(config.sessionsFile, ctx.sessionKey, fallback, api.logger);
       }
+      api.emit?.("self-heal:session-patched", {
+        sessionKey: ctx.sessionKey,
+        oldModel: pinnedModel ?? key,
+        newModel: fallback,
+        trigger: "agent_end",
+        dryRun: config.dryRun,
+      });
     }
   });
 
@@ -336,12 +352,22 @@ export default function register(api: any) {
 
     const state = loadState(config.stateFile);
     const hitAt = nowSec();
+    const nextAvail = hitAt + config.cooldownMinutes * 60;
     state.limited[config.modelOrder[0]] = {
       lastHitAt: hitAt,
-      nextAvailableAt: hitAt + config.cooldownMinutes * 60,
+      nextAvailableAt: nextAvail,
       reason: "outbound error observed",
     };
     saveState(config.stateFile, state);
+
+    api.emit?.("self-heal:model-cooldown", {
+      model: config.modelOrder[0],
+      reason: "outbound error observed",
+      cooldownSec: config.cooldownMinutes * 60,
+      nextAvailableAt: nextAvail,
+      trigger: "message_sent",
+      dryRun: config.dryRun,
+    });
 
     const fallback = pickFallback(config.modelOrder, state);
     if (config.patchPins && ctx?.sessionKey) {
@@ -350,6 +376,13 @@ export default function register(api: any) {
       } else {
         patchSessionModel(config.sessionsFile, ctx.sessionKey, fallback, api.logger);
       }
+      api.emit?.("self-heal:session-patched", {
+        sessionKey: ctx.sessionKey,
+        oldModel: config.modelOrder[0],
+        newModel: fallback,
+        trigger: "message_sent",
+        dryRun: config.dryRun,
+      });
     }
   });
 
@@ -386,15 +419,16 @@ export default function register(api: any) {
                 since >= config.whatsappMinRestartIntervalSec;
 
               if (shouldRestart) {
+                const streak = state.whatsapp!.disconnectStreak!;
                 if (config.dryRun) {
                   api.logger?.info?.(
-                    `[self-heal] [dry-run] would restart gateway (WhatsApp disconnect streak=${state.whatsapp!.disconnectStreak})`
+                    `[self-heal] [dry-run] would restart gateway (WhatsApp disconnect streak=${streak})`
                   );
                   state.whatsapp!.lastRestartAt = nowSec();
                   state.whatsapp!.disconnectStreak = 0;
                 } else {
                   api.logger?.warn?.(
-                    `[self-heal] WhatsApp appears disconnected (streak=${state.whatsapp!.disconnectStreak}). Restarting gateway.`
+                    `[self-heal] WhatsApp appears disconnected (streak=${streak}). Restarting gateway.`
                   );
                   // Guardrail: never restart if openclaw.json is invalid
                   const v = isConfigValid();
@@ -409,6 +443,10 @@ export default function register(api: any) {
                     state.whatsapp!.disconnectStreak = 0;
                   }
                 }
+                api.emit?.("self-heal:whatsapp-restart", {
+                  disconnectStreak: streak,
+                  dryRun: config.dryRun,
+                });
               }
             }
           }
@@ -431,9 +469,10 @@ export default function register(api: any) {
               state.cron!.failCounts![id] = isFail ? prev + 1 : 0;
 
               if (isFail && state.cron!.failCounts![id] >= config.cronFailThreshold) {
+                const failCount = state.cron!.failCounts![id];
                 if (config.dryRun) {
                   api.logger?.info?.(
-                    `[self-heal] [dry-run] would disable cron ${name} (${id}), failures=${state.cron!.failCounts![id]}`
+                    `[self-heal] [dry-run] would disable cron ${name} (${id}), failures=${failCount}`
                   );
                   const lastIssueAt = state.cron!.lastIssueCreatedAt![id] ?? 0;
                   if (nowSec() - lastIssueAt >= config.issueCooldownSec) {
@@ -480,6 +519,14 @@ export default function register(api: any) {
                   }
                 }
 
+                api.emit?.("self-heal:cron-disabled", {
+                  cronId: id,
+                  cronName: name,
+                  consecutiveFailures: failCount,
+                  lastError: lastError.slice(0, 160),
+                  dryRun: config.dryRun,
+                });
+
                 state.cron!.failCounts![id] = 0;
               }
             }
@@ -525,6 +572,11 @@ export default function register(api: any) {
                   `[self-heal] model ${model} recovered early via probe, removing from cooldown`
                 );
                 delete state.limited[model];
+
+                api.emit?.("self-heal:model-recovered", {
+                  model,
+                  isPreferred: model === config.modelOrder[0],
+                });
 
                 if (model === config.modelOrder[0]) {
                   api.logger?.info?.(

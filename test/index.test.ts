@@ -40,6 +40,7 @@ function emptyState(): State {
 function mockApi(overrides: Record<string, any> = {}) {
   const handlers: Record<string, Function[]> = {};
   const services: any[] = [];
+  const emitted: { event: string; payload: any }[] = [];
 
   return {
     pluginConfig: overrides.pluginConfig ?? {},
@@ -51,6 +52,9 @@ function mockApi(overrides: Record<string, any> = {}) {
     on(event: string, handler: Function) {
       handlers[event] = handlers[event] || [];
       handlers[event].push(handler);
+    },
+    emit(event: string, payload: any) {
+      emitted.push({ event, payload });
     },
     registerService(svc: any) {
       services.push(svc);
@@ -67,6 +71,7 @@ function mockApi(overrides: Record<string, any> = {}) {
     // test helpers
     _handlers: handlers,
     _services: services,
+    _emitted: emitted,
     _emit(event: string, ...args: any[]) {
       for (const h of handlers[event] ?? []) h(...args);
     },
@@ -1510,6 +1515,418 @@ describe("register", () => {
       expect(api.logger.info).toHaveBeenCalledWith(
         expect.stringContaining("config reloaded: changed dryRun")
       );
+    });
+  });
+
+  describe("observability events", () => {
+    it("emits self-heal:model-cooldown on agent_end rate-limit", () => {
+      const api = mockApi({
+        pluginConfig: {
+          stateFile,
+          sessionsFile,
+          configFile,
+          modelOrder: ["model-a", "model-b"],
+          cooldownMinutes: 10,
+        },
+      });
+      register(api);
+
+      api._emit(
+        "agent_end",
+        { success: false, error: "HTTP 429 rate limit exceeded" },
+        {}
+      );
+
+      const ev = api._emitted.find((e) => e.event === "self-heal:model-cooldown");
+      expect(ev).toBeDefined();
+      expect(ev!.payload.model).toBe("model-a");
+      expect(ev!.payload.reason).toBe("HTTP 429 rate limit exceeded");
+      expect(ev!.payload.cooldownSec).toBe(10 * 60);
+      expect(ev!.payload.trigger).toBe("agent_end");
+      expect(ev!.payload.dryRun).toBe(false);
+    });
+
+    it("emits self-heal:model-cooldown on message_sent rate-limit", () => {
+      const api = mockApi({
+        pluginConfig: {
+          stateFile,
+          sessionsFile,
+          configFile,
+          modelOrder: ["primary", "fallback"],
+          cooldownMinutes: 5,
+        },
+      });
+      register(api);
+
+      api._emit(
+        "message_sent",
+        { content: "Error: quota exceeded for this model" },
+        {}
+      );
+
+      const ev = api._emitted.find((e) => e.event === "self-heal:model-cooldown");
+      expect(ev).toBeDefined();
+      expect(ev!.payload.model).toBe("primary");
+      expect(ev!.payload.reason).toBe("outbound error observed");
+      expect(ev!.payload.cooldownSec).toBe(5 * 60);
+      expect(ev!.payload.trigger).toBe("message_sent");
+    });
+
+    it("emits self-heal:session-patched on agent_end with session context", () => {
+      fs.writeFileSync(
+        sessionsFile,
+        JSON.stringify({ "s1": { model: "model-a" } })
+      );
+
+      const api = mockApi({
+        pluginConfig: {
+          stateFile,
+          sessionsFile,
+          configFile,
+          modelOrder: ["model-a", "model-b"],
+          cooldownMinutes: 10,
+        },
+      });
+      register(api);
+
+      api._emit(
+        "agent_end",
+        { success: false, error: "rate limit hit" },
+        { sessionKey: "s1" }
+      );
+
+      const ev = api._emitted.find((e) => e.event === "self-heal:session-patched");
+      expect(ev).toBeDefined();
+      expect(ev!.payload.sessionKey).toBe("s1");
+      expect(ev!.payload.oldModel).toBe("model-a");
+      expect(ev!.payload.newModel).toBe("model-b");
+      expect(ev!.payload.trigger).toBe("agent_end");
+      expect(ev!.payload.dryRun).toBe(false);
+    });
+
+    it("emits self-heal:session-patched on message_sent with session context", () => {
+      fs.writeFileSync(
+        sessionsFile,
+        JSON.stringify({ "s1": { model: "primary" } })
+      );
+
+      const api = mockApi({
+        pluginConfig: {
+          stateFile,
+          sessionsFile,
+          configFile,
+          modelOrder: ["primary", "fallback"],
+          cooldownMinutes: 5,
+        },
+      });
+      register(api);
+
+      api._emit(
+        "message_sent",
+        { content: "429 Too Many Requests" },
+        { sessionKey: "s1" }
+      );
+
+      const ev = api._emitted.find((e) => e.event === "self-heal:session-patched");
+      expect(ev).toBeDefined();
+      expect(ev!.payload.sessionKey).toBe("s1");
+      expect(ev!.payload.oldModel).toBe("primary");
+      expect(ev!.payload.newModel).toBe("fallback");
+      expect(ev!.payload.trigger).toBe("message_sent");
+    });
+
+    it("does not emit session-patched when no session context", () => {
+      const api = mockApi({
+        pluginConfig: {
+          stateFile,
+          sessionsFile,
+          configFile,
+          modelOrder: ["model-a", "model-b"],
+          cooldownMinutes: 10,
+        },
+      });
+      register(api);
+
+      api._emit(
+        "agent_end",
+        { success: false, error: "rate limit hit" },
+        {}
+      );
+
+      const ev = api._emitted.find((e) => e.event === "self-heal:session-patched");
+      expect(ev).toBeUndefined();
+    });
+
+    it("emits self-heal:model-cooldown with dryRun=true in dry-run mode", () => {
+      const api = mockApi({
+        pluginConfig: {
+          stateFile,
+          sessionsFile,
+          configFile,
+          modelOrder: ["model-a", "model-b"],
+          cooldownMinutes: 10,
+          dryRun: true,
+        },
+      });
+      register(api);
+
+      api._emit(
+        "agent_end",
+        { success: false, error: "rate limit hit" },
+        {}
+      );
+
+      const ev = api._emitted.find((e) => e.event === "self-heal:model-cooldown");
+      expect(ev).toBeDefined();
+      expect(ev!.payload.dryRun).toBe(true);
+    });
+
+    it("emits self-heal:session-patched with dryRun=true in dry-run mode", () => {
+      fs.writeFileSync(
+        sessionsFile,
+        JSON.stringify({ "s1": { model: "model-a" } })
+      );
+
+      const api = mockApi({
+        pluginConfig: {
+          stateFile,
+          sessionsFile,
+          configFile,
+          modelOrder: ["model-a", "model-b"],
+          cooldownMinutes: 10,
+          dryRun: true,
+        },
+      });
+      register(api);
+
+      api._emit(
+        "agent_end",
+        { success: false, error: "rate limit hit" },
+        { sessionKey: "s1" }
+      );
+
+      const ev = api._emitted.find((e) => e.event === "self-heal:session-patched");
+      expect(ev).toBeDefined();
+      expect(ev!.payload.dryRun).toBe(true);
+    });
+
+    it("emits self-heal:whatsapp-restart when WhatsApp is restarted", async () => {
+      const api = mockApi({
+        pluginConfig: {
+          stateFile,
+          sessionsFile,
+          configFile,
+          configBackupsDir: path.join(dir, "backups"),
+          modelOrder: ["model-a"],
+          dryRun: true,
+          autoFix: { restartWhatsappOnDisconnect: true, whatsappDisconnectThreshold: 2 },
+        },
+      });
+
+      api.runtime.system.runCommandWithTimeout.mockResolvedValue({
+        exitCode: 0,
+        stdout: JSON.stringify({ channels: { whatsapp: { status: "disconnected" } } }),
+        stderr: "",
+      });
+
+      saveState(stateFile, {
+        ...emptyState(),
+        whatsapp: { disconnectStreak: 2, lastRestartAt: 0 },
+      });
+
+      register(api);
+
+      const svc = api._services[0];
+      await svc.start();
+      await new Promise((r) => setTimeout(r, 50));
+      await svc.stop();
+
+      const ev = api._emitted.find((e) => e.event === "self-heal:whatsapp-restart");
+      expect(ev).toBeDefined();
+      expect(ev!.payload.disconnectStreak).toBeGreaterThanOrEqual(2);
+      expect(ev!.payload.dryRun).toBe(true);
+    });
+
+    it("emits self-heal:cron-disabled when a cron is disabled", async () => {
+      const api = mockApi({
+        pluginConfig: {
+          stateFile,
+          sessionsFile,
+          configFile,
+          configBackupsDir: path.join(dir, "backups"),
+          modelOrder: ["model-a"],
+          dryRun: true,
+          autoFix: { disableFailingCrons: true, cronFailThreshold: 1 },
+        },
+      });
+
+      api.runtime.system.runCommandWithTimeout.mockResolvedValue({
+        exitCode: 0,
+        stdout: JSON.stringify({
+          jobs: [{ id: "cron-1", name: "test-cron", state: { lastStatus: "error", lastError: "timeout exceeded" } }],
+        }),
+        stderr: "",
+      });
+
+      register(api);
+
+      const svc = api._services[0];
+      await svc.start();
+      await new Promise((r) => setTimeout(r, 50));
+      await svc.stop();
+
+      const ev = api._emitted.find((e) => e.event === "self-heal:cron-disabled");
+      expect(ev).toBeDefined();
+      expect(ev!.payload.cronId).toBe("cron-1");
+      expect(ev!.payload.cronName).toBe("test-cron");
+      expect(ev!.payload.consecutiveFailures).toBeGreaterThanOrEqual(1);
+      expect(ev!.payload.lastError).toBe("timeout exceeded");
+      expect(ev!.payload.dryRun).toBe(true);
+    });
+
+    it("emits self-heal:model-recovered when a model recovers via probe", async () => {
+      const hitAt = nowSec() - 400;
+      saveState(stateFile, {
+        ...emptyState(),
+        limited: {
+          "model-a": { lastHitAt: hitAt, nextAvailableAt: nowSec() + 9999 },
+        },
+      });
+
+      const api = mockApi({
+        pluginConfig: {
+          stateFile,
+          sessionsFile,
+          configFile,
+          modelOrder: ["model-a", "model-b"],
+          probeEnabled: true,
+          probeIntervalSec: 300,
+        },
+      });
+      api.runtime.system.runCommandWithTimeout.mockResolvedValue({
+        exitCode: 0,
+        stdout: "ok",
+        stderr: "",
+      });
+      register(api);
+
+      const svc = api._services[0];
+      await svc.start();
+      await new Promise((r) => setTimeout(r, 50));
+      await svc.stop();
+
+      const ev = api._emitted.find((e) => e.event === "self-heal:model-recovered");
+      expect(ev).toBeDefined();
+      expect(ev!.payload.model).toBe("model-a");
+      expect(ev!.payload.isPreferred).toBe(true);
+    });
+
+    it("emits model-recovered with isPreferred=false for non-primary models", async () => {
+      const hitAt = nowSec() - 400;
+      saveState(stateFile, {
+        ...emptyState(),
+        limited: {
+          "model-b": { lastHitAt: hitAt, nextAvailableAt: nowSec() + 9999 },
+        },
+      });
+
+      const api = mockApi({
+        pluginConfig: {
+          stateFile,
+          sessionsFile,
+          configFile,
+          modelOrder: ["model-a", "model-b"],
+          probeEnabled: true,
+          probeIntervalSec: 300,
+        },
+      });
+      api.runtime.system.runCommandWithTimeout.mockResolvedValue({
+        exitCode: 0,
+        stdout: "ok",
+        stderr: "",
+      });
+      register(api);
+
+      const svc = api._services[0];
+      await svc.start();
+      await new Promise((r) => setTimeout(r, 50));
+      await svc.stop();
+
+      const ev = api._emitted.find((e) => e.event === "self-heal:model-recovered");
+      expect(ev).toBeDefined();
+      expect(ev!.payload.model).toBe("model-b");
+      expect(ev!.payload.isPreferred).toBe(false);
+    });
+
+    it("does not emit model-recovered when probe fails", async () => {
+      const hitAt = nowSec() - 400;
+      saveState(stateFile, {
+        ...emptyState(),
+        limited: {
+          "model-a": { lastHitAt: hitAt, nextAvailableAt: nowSec() + 9999 },
+        },
+      });
+
+      const api = mockApi({
+        pluginConfig: {
+          stateFile,
+          sessionsFile,
+          configFile,
+          modelOrder: ["model-a", "model-b"],
+          probeEnabled: true,
+          probeIntervalSec: 300,
+        },
+      });
+      // Default mock returns exitCode 1
+      register(api);
+
+      const svc = api._services[0];
+      await svc.start();
+      await new Promise((r) => setTimeout(r, 50));
+      await svc.stop();
+
+      const ev = api._emitted.find((e) => e.event === "self-heal:model-recovered");
+      expect(ev).toBeUndefined();
+    });
+
+    it("does not emit any events for non-rate-limit errors", () => {
+      const api = mockApi({
+        pluginConfig: {
+          stateFile,
+          sessionsFile,
+          configFile,
+          modelOrder: ["model-a"],
+        },
+      });
+      register(api);
+
+      api._emit("agent_end", { success: false, error: "generic timeout" }, {});
+
+      expect(api._emitted).toHaveLength(0);
+    });
+
+    it("emits cooldown event with extra duration for auth errors", () => {
+      const api = mockApi({
+        pluginConfig: {
+          stateFile,
+          sessionsFile,
+          configFile,
+          modelOrder: ["model-a", "model-b"],
+          cooldownMinutes: 10,
+        },
+      });
+      register(api);
+
+      api._emit(
+        "agent_end",
+        { success: false, error: "HTTP 401 Unauthorized" },
+        {}
+      );
+
+      const ev = api._emitted.find((e) => e.event === "self-heal:model-cooldown");
+      expect(ev).toBeDefined();
+      // Auth errors add 12 * 60 = 720 minutes, total (10 + 720) * 60 = 43800 seconds
+      expect(ev!.payload.cooldownSec).toBe((10 + 720) * 60);
     });
   });
 });
