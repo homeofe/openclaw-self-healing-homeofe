@@ -63,20 +63,21 @@
       "priority": "low",
       "depends_on": [],
       "created": "2026-02-28T13:25:43.201Z",
-      "completed": "2026-02-28T14:42:00.000Z",
-      "notes": "Config is now re-read from api.pluginConfig on each monitor tick (every 60s). Changes are validated, diffed, and logged. Invalid new config is rejected (old config kept). Exported parseConfig() and configDiff() for testability. 16 new tests added (68 total).",
+      "notes": "## Summary\n\nPlugin config (`modelOrder`, `cooldownMinutes`, `autoFix.*`) is read once at startup via `api.pluginConfig`. Changing any config value requires a full gateway restart.\n\n## Scope\n\n- Watch for config changes (file watch or periodic re-read)\n- Re-read plugin config on change and update internal variables\n- Handle edge cases: invalid new config (keep old), partial updates\n- Alternatively, support a reload command: `openclaw self-heal reload`\n\n## Acceptance criteria\n\n- Config changes take",
       "github_issue": 8,
-      "github_repo": "elvatis/openclaw-self-healing-homeofe"
+      "github_repo": "elvatis/openclaw-self-healing-homeofe",
+      "completed": "2026-02-28T13:42:34.823Z"
     },
     "T-007": {
       "title": "Add active model recovery probing to shorten cooldown periods",
-      "status": "ready",
+      "status": "done",
       "priority": "medium",
       "depends_on": [],
       "created": "2026-02-28T13:25:43.204Z",
-      "notes": "## Summary\n\nModels in cooldown are currently recovered passively: `pickFallback()` checks `nextAvailableAt` only when a new failure occurs. If a model recovers early, the plugin still uses the fallback until the full cooldown expires.\n\n## Scope\n\n- Add a periodic probe (e.g., every 5 minutes) that tests cooldown models\n- Use a lightweight API call (e.g., model info endpoint or small completion)\n- If the model responds successfully, remove it from cooldown early\n- Configurable probe interval and e",
+      "notes": "Active model recovery probing added to monitor tick. Cooldown models are probed via `openclaw model probe` at configurable intervals (default 300s). Successful probes remove the model from cooldown early. Config options: probeEnabled (default true), probeIntervalSec (default 300). State extended with lastProbeAt per cooldown entry. 11 new tests (79 total), zero type errors.",
       "github_issue": 7,
-      "github_repo": "elvatis/openclaw-self-healing-homeofe"
+      "github_repo": "elvatis/openclaw-self-healing-homeofe",
+      "completed": "2026-02-28T15:40:00.000Z"
     },
     "T-008": {
       "title": "Add dry-run mode for safe validation of healing logic",
@@ -109,7 +110,7 @@
       "github_repo": "elvatis/openclaw-self-healing-homeofe"
     }
   },
-  "quick_context": "T-006 done: Config hot-reload added - plugin re-reads api.pluginConfig every 60s, validates and diffs changes, logs updates. 68 tests pass, zero type errors. T-005 still blocked on openclaw plugins list --json API.",
+  "quick_context": "T-007 done: Active model recovery probing - cooldown models are probed every 300s (configurable), removed from cooldown on success. 79 tests pass, zero type errors. T-005 still blocked on openclaw plugins list --json API.",
   "aahp_version": "3.0",
   "project": "openclaw-self-healing-elvatis",
   "token_budget": {
@@ -118,12 +119,12 @@
     "manifest_plus_core": 300
   },
   "last_session": {
-    "timestamp": "2026-02-28T14:42:00.000Z",
+    "timestamp": "2026-02-28T15:40:00.000Z",
     "phase": "execution",
     "agent": "claude-code",
-    "commit": "d95931b",
+    "commit": "dc083b8",
     "duration_minutes": 5,
-    "session_id": "t006-config-hot-reload"
+    "session_id": "t007-active-model-probing"
   },
   "next_task_id": 11
 }

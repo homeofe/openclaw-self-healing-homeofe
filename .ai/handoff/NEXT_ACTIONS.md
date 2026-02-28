@@ -4,25 +4,13 @@
 
 | Status  | Count |
 |---------|-------|
-| Done    | 6     |
-| Ready   | 4     |
+| Done    | 7     |
+| Ready   | 3     |
 | Blocked | 1     |
 
 ---
 
 ## Ready - Work These Next
-
-### T-007 [medium] - Add active model recovery probing to shorten cooldown periods
-- **Goal:** Actively probe cooldown models to detect early recovery, reducing unnecessary fallback time.
-- **Context:** Models in cooldown are recovered passively via `pickFallback()` only when a new failure occurs. If a model recovers before `nextAvailableAt`, the plugin still uses the fallback.
-- **What to do:**
-  - Add a periodic probe (e.g., every 5 minutes) in the monitor tick that tests cooldown models
-  - Use a lightweight API call (model info or small completion) to check availability
-  - If the model responds, remove it from cooldown early by clearing `state.limited[model]`
-  - Make probe interval configurable via `autoFix.probeIntervalSec`
-- **Files:** `index.ts`, `test/index.test.ts`, `openclaw.plugin.json`
-- **Definition of done:** Cooldown models are probed periodically; successful probe clears cooldown early; tests cover probe logic.
-- **GitHub Issue:** #7
 
 ### T-008 [medium] - Add dry-run mode for safe validation of healing logic
 - **Goal:** Allow operators to test what the plugin would do without executing healing actions.
@@ -40,7 +28,7 @@
 - **Goal:** Enable monitoring/alerting systems to track heal actions via structured events.
 - **Context:** The plugin uses `api.logger` for logging but emits no structured events. External monitoring cannot track cooldowns, session patches, or failure rates.
 - **What to do:**
-  - Emit structured events via `api.emit()` for key actions: model-cooldown, session-patched, whatsapp-restart, cron-disabled, config-reloaded
+  - Emit structured events via `api.emit()` for key actions: model-cooldown, session-patched, whatsapp-restart, cron-disabled, config-reloaded, model-recovered
   - Include relevant metadata (model ID, reason, duration, session key, etc.)
   - Ensure events are emitted alongside existing log calls
 - **Files:** `index.ts`, `test/index.test.ts`
@@ -80,8 +68,8 @@
 
 | Task  | Title | Date |
 |-------|-------|------|
+| T-007 | Add active model recovery probing to shorten cooldown periods | 2026-02-28 |
 | T-006 | Support configuration hot-reload without gateway restart | 2026-02-28 |
 | T-004 | Add TypeScript build pipeline and type-checking | 2026-02-27 |
 | T-003 | Add unit test suite for core healing logic | 2026-02-27 |
 | T-002 | Run scripts/create-roadmap-issues.sh after gh auth login | 2026-02-27 |
-| T-001 | Define v0.2 roadmap items as GitHub issues and prioritize | 2026-02-27 |
