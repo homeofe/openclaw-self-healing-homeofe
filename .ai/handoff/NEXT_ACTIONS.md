@@ -4,25 +4,13 @@
 
 | Status  | Count |
 |---------|-------|
-| Done    | 7     |
-| Ready   | 3     |
+| Done    | 8     |
+| Ready   | 2     |
 | Blocked | 1     |
 
 ---
 
 ## Ready - Work These Next
-
-### T-008 [medium] - Add dry-run mode for safe validation of healing logic
-- **Goal:** Allow operators to test what the plugin would do without executing healing actions.
-- **Context:** No way to validate healing behavior without actually restarting gateways, disabling crons, or patching sessions.
-- **What to do:**
-  - Add `dryRun: boolean` config option (default: false) to `PluginConfig` and `parseConfig()`
-  - When enabled: log all actions that would be taken, but skip execution
-  - State tracking still updates (to test transitions) but side-effects are skipped
-  - Add to `openclaw.plugin.json` config schema
-- **Files:** `index.ts`, `test/index.test.ts`, `openclaw.plugin.json`
-- **Definition of done:** `dryRun: true` logs actions without executing them; tests verify no side-effects in dry-run mode.
-- **GitHub Issue:** #6
 
 ### T-009 [medium] - Emit structured observability events for heal actions
 - **Goal:** Enable monitoring/alerting systems to track heal actions via structured events.
@@ -68,8 +56,8 @@
 
 | Task  | Title | Date |
 |-------|-------|------|
+| T-008 | Add dry-run mode for safe validation of healing logic | 2026-02-28 |
 | T-007 | Add active model recovery probing to shorten cooldown periods | 2026-02-28 |
 | T-006 | Support configuration hot-reload without gateway restart | 2026-02-28 |
 | T-004 | Add TypeScript build pipeline and type-checking | 2026-02-27 |
 | T-003 | Add unit test suite for core healing logic | 2026-02-27 |
-| T-002 | Run scripts/create-roadmap-issues.sh after gh auth login | 2026-02-27 |
