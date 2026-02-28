@@ -1,13 +1,87 @@
 # NEXT_ACTIONS (AAHP)
 
-## Ready
-- [ ] Run `gh auth login` then `bash scripts/create-roadmap-issues.sh` to create GitHub issues
-- [ ] Add unit test suite (vitest + tsconfig) - see ROADMAP.md #1
-- [ ] Add TypeScript build pipeline - see ROADMAP.md #2
+## Status Summary
+
+| Status  | Count |
+|---------|-------|
+| Done    | 6     |
+| Ready   | 4     |
+| Blocked | 1     |
+
+---
+
+## Ready - Work These Next
+
+### T-007 [medium] - Add active model recovery probing to shorten cooldown periods
+- **Goal:** Actively probe cooldown models to detect early recovery, reducing unnecessary fallback time.
+- **Context:** Models in cooldown are recovered passively via `pickFallback()` only when a new failure occurs. If a model recovers before `nextAvailableAt`, the plugin still uses the fallback.
+- **What to do:**
+  - Add a periodic probe (e.g., every 5 minutes) in the monitor tick that tests cooldown models
+  - Use a lightweight API call (model info or small completion) to check availability
+  - If the model responds, remove it from cooldown early by clearing `state.limited[model]`
+  - Make probe interval configurable via `autoFix.probeIntervalSec`
+- **Files:** `index.ts`, `test/index.test.ts`, `openclaw.plugin.json`
+- **Definition of done:** Cooldown models are probed periodically; successful probe clears cooldown early; tests cover probe logic.
+- **GitHub Issue:** #7
+
+### T-008 [medium] - Add dry-run mode for safe validation of healing logic
+- **Goal:** Allow operators to test what the plugin would do without executing healing actions.
+- **Context:** No way to validate healing behavior without actually restarting gateways, disabling crons, or patching sessions.
+- **What to do:**
+  - Add `dryRun: boolean` config option (default: false) to `PluginConfig` and `parseConfig()`
+  - When enabled: log all actions that would be taken, but skip execution
+  - State tracking still updates (to test transitions) but side-effects are skipped
+  - Add to `openclaw.plugin.json` config schema
+- **Files:** `index.ts`, `test/index.test.ts`, `openclaw.plugin.json`
+- **Definition of done:** `dryRun: true` logs actions without executing them; tests verify no side-effects in dry-run mode.
+- **GitHub Issue:** #6
+
+### T-009 [medium] - Emit structured observability events for heal actions
+- **Goal:** Enable monitoring/alerting systems to track heal actions via structured events.
+- **Context:** The plugin uses `api.logger` for logging but emits no structured events. External monitoring cannot track cooldowns, session patches, or failure rates.
+- **What to do:**
+  - Emit structured events via `api.emit()` for key actions: model-cooldown, session-patched, whatsapp-restart, cron-disabled, config-reloaded
+  - Include relevant metadata (model ID, reason, duration, session key, etc.)
+  - Ensure events are emitted alongside existing log calls
+- **Files:** `index.ts`, `test/index.test.ts`
+- **Definition of done:** Each healing action emits a structured event; tests verify events are emitted with correct payload.
+- **GitHub Issue:** #5
+
+### T-010 [medium] - Expose self-heal status for external monitoring
+- **Goal:** Let external tools (dashboards, CLI, other plugins) query self-heal state.
+- **Context:** No way to know which models are in cooldown, how many heals occurred, or WhatsApp status without reading the raw state file.
+- **What to do:**
+  - Register a plugin command or API endpoint (e.g., `openclaw self-heal status`)
+  - Return JSON with: cooldown models, WhatsApp status, cron heal history, last heal actions
+  - Alternatively, write a status summary to a well-known file path
+- **Files:** `index.ts`, `test/index.test.ts`
+- **Definition of done:** External tools can query self-heal status; tests verify status output format.
+- **GitHub Issue:** #4
+
+---
 
 ## Blocked
-- [ ] Implement structured plugin health monitoring - blocked on `openclaw plugins list --json`
 
-## Done
-- [x] Initial scaffold
-- [x] Define v0.2 roadmap items as issues and prioritize (ROADMAP.md + creation script)
+### T-005 [high] - Implement structured plugin health monitoring and auto-disable
+- **Blocked by:** Waiting for `openclaw plugins list --json` API from openclaw core
+- **Goal:** Monitor plugin health and auto-disable failing plugins using structured JSON output.
+- **Context:** Current code has a stub that parses plain text output from `openclaw plugins list`. No robust parsing is possible without the `--json` flag.
+- **What to do (when unblocked):**
+  - Parse `openclaw plugins list --json` output for plugin status
+  - Auto-disable plugins with `status=error` (respecting `pluginDisableCooldownSec`)
+  - Create GitHub issues for disabled plugins
+- **Files:** `index.ts`, `test/index.test.ts`
+- **Definition of done:** Failing plugins are detected via JSON API and auto-disabled; tests cover detection and disable logic.
+- **GitHub Issue:** #3
+
+---
+
+## Recently Completed
+
+| Task  | Title | Date |
+|-------|-------|------|
+| T-006 | Support configuration hot-reload without gateway restart | 2026-02-28 |
+| T-004 | Add TypeScript build pipeline and type-checking | 2026-02-27 |
+| T-003 | Add unit test suite for core healing logic | 2026-02-27 |
+| T-002 | Run scripts/create-roadmap-issues.sh after gh auth login | 2026-02-27 |
+| T-001 | Define v0.2 roadmap items as GitHub issues and prioritize | 2026-02-27 |

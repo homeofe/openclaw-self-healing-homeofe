@@ -1,4 +1,4 @@
-﻿import fs from "node:fs";
+import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
@@ -25,6 +25,66 @@ export type State = {
     lastDisableAt?: Record<string, number>; // plugin id -> timestamp
   };
 };
+
+export type PluginConfig = {
+  modelOrder: string[];
+  cooldownMinutes: number;
+  stateFile: string;
+  sessionsFile: string;
+  configFile: string;
+  configBackupsDir: string;
+  patchPins: boolean;
+  disableFailingCrons: boolean;
+  disableFailingPlugins: boolean;
+  whatsappRestartEnabled: boolean;
+  whatsappDisconnectThreshold: number;
+  whatsappMinRestartIntervalSec: number;
+  cronFailThreshold: number;
+  issueCooldownSec: number;
+  pluginDisableCooldownSec: number;
+};
+
+const DEFAULT_MODEL_ORDER = [
+  "anthropic/claude-opus-4-6",
+  "openai-codex/gpt-5.2",
+  "google-gemini-cli/gemini-2.5-flash",
+];
+
+export function parseConfig(raw: any): PluginConfig {
+  const cfg = raw ?? {};
+  const autoFix = cfg.autoFix ?? {};
+  return {
+    modelOrder: cfg.modelOrder?.length ? [...cfg.modelOrder] : [...DEFAULT_MODEL_ORDER],
+    cooldownMinutes: cfg.cooldownMinutes ?? 300,
+    stateFile: expandHome(cfg.stateFile ?? "~/.openclaw/workspace/memory/self-heal-state.json"),
+    sessionsFile: expandHome(cfg.sessionsFile ?? "~/.openclaw/agents/main/sessions/sessions.json"),
+    configFile: expandHome(cfg.configFile ?? "~/.openclaw/openclaw.json"),
+    configBackupsDir: expandHome(cfg.configBackupsDir ?? "~/.openclaw/backups/openclaw.json"),
+    patchPins: autoFix.patchSessionPins !== false,
+    disableFailingCrons: autoFix.disableFailingCrons === true,
+    disableFailingPlugins: autoFix.disableFailingPlugins === true,
+    whatsappRestartEnabled: autoFix.restartWhatsappOnDisconnect !== false,
+    whatsappDisconnectThreshold: autoFix.whatsappDisconnectThreshold ?? 2,
+    whatsappMinRestartIntervalSec: autoFix.whatsappMinRestartIntervalSec ?? 300,
+    cronFailThreshold: autoFix.cronFailThreshold ?? 3,
+    issueCooldownSec: autoFix.issueCooldownSec ?? 6 * 3600,
+    pluginDisableCooldownSec: autoFix.pluginDisableCooldownSec ?? 3600,
+  };
+}
+
+export function configDiff(a: PluginConfig, b: PluginConfig): string[] {
+  const changes: string[] = [];
+  for (const k of Object.keys(a) as (keyof PluginConfig)[]) {
+    const va = a[k];
+    const vb = b[k];
+    if (Array.isArray(va) && Array.isArray(vb)) {
+      if (JSON.stringify(va) !== JSON.stringify(vb)) changes.push(k);
+    } else if (va !== vb) {
+      changes.push(k);
+    }
+  }
+  return changes;
+}
 
 export function nowSec() {
   return Math.floor(Date.now() / 1000);
@@ -123,40 +183,19 @@ export function safeJsonParse<T>(s: string): T | undefined {
 }
 
 export default function register(api: any) {
-  const cfg = (api.pluginConfig ?? {}) as any;
-  if (cfg.enabled === false) return;
+  const raw = (api.pluginConfig ?? {}) as any;
+  if (raw.enabled === false) return;
 
-  const modelOrder: string[] = cfg.modelOrder?.length ? cfg.modelOrder : [
-    "anthropic/claude-opus-4-6",
-    "openai-codex/gpt-5.2",
-    "google-gemini-cli/gemini-2.5-flash",
-  ];
-  const cooldownMinutes: number = cfg.cooldownMinutes ?? 300;
-  const stateFile = expandHome(cfg.stateFile ?? "~/.openclaw/workspace/memory/self-heal-state.json");
-  const sessionsFile = expandHome(cfg.sessionsFile ?? "~/.openclaw/agents/main/sessions/sessions.json");
-  const configFile = expandHome(cfg.configFile ?? "~/.openclaw/openclaw.json");
-  const configBackupsDir = expandHome(cfg.configBackupsDir ?? "~/.openclaw/backups/openclaw.json");
+  let config = parseConfig(raw);
 
-  const autoFix = cfg.autoFix ?? {};
-  const patchPins: boolean = autoFix.patchSessionPins !== false;
-  const disableFailingCrons: boolean = autoFix.disableFailingCrons === true;
-  const disableFailingPlugins: boolean = autoFix.disableFailingPlugins === true;
-
-  const whatsappRestartEnabled: boolean = cfg?.autoFix?.restartWhatsappOnDisconnect !== false;
-  const whatsappDisconnectThreshold: number = cfg?.autoFix?.whatsappDisconnectThreshold ?? 2;
-  const whatsappMinRestartIntervalSec: number = cfg?.autoFix?.whatsappMinRestartIntervalSec ?? 300;
-  const cronFailThreshold: number = cfg?.autoFix?.cronFailThreshold ?? 3;
-  const issueCooldownSec: number = cfg?.autoFix?.issueCooldownSec ?? 6 * 3600;
-  const pluginDisableCooldownSec: number = cfg?.autoFix?.pluginDisableCooldownSec ?? 3600;
-
-  api.logger?.info?.(`[self-heal] enabled. order=${modelOrder.join(" -> ")}`);
+  api.logger?.info?.(`[self-heal] enabled. order=${config.modelOrder.join(" -> ")}`);
 
   // If the gateway booted and config is valid, remove any pending backups from previous runs.
   cleanupPendingBackups("startup").catch(() => undefined);
 
   function isConfigValid(): { ok: boolean; error?: string } {
     try {
-      const raw = fs.readFileSync(configFile, "utf-8");
+      const raw = fs.readFileSync(config.configFile, "utf-8");
       JSON.parse(raw);
       return { ok: true };
     } catch (e: any) {
@@ -166,16 +205,16 @@ export default function register(api: any) {
 
   function backupConfig(reason: string): string | undefined {
     try {
-      fs.mkdirSync(configBackupsDir, { recursive: true });
+      fs.mkdirSync(config.configBackupsDir, { recursive: true });
       const ts = new Date().toISOString().replace(/[:.]/g, "-");
-      const out = path.join(configBackupsDir, `openclaw.json.${ts}.bak`);
-      fs.copyFileSync(configFile, out);
+      const out = path.join(config.configBackupsDir, `openclaw.json.${ts}.bak`);
+      fs.copyFileSync(config.configFile, out);
 
       // Mark as pending so we can delete it after we have evidence the gateway still boots.
-      const st = loadState(stateFile);
+      const st = loadState(config.stateFile);
       st.pendingBackups = st.pendingBackups || {};
       st.pendingBackups[out] = { createdAt: nowSec(), reason };
-      saveState(stateFile, st);
+      saveState(config.stateFile, st);
 
       api.logger?.info?.(`[self-heal] backed up openclaw.json (${reason}) -> ${out} (pending cleanup)`);
       return out;
@@ -199,7 +238,7 @@ export default function register(api: any) {
       return;
     }
 
-    const st = loadState(stateFile);
+    const st = loadState(config.stateFile);
     const pending = st.pendingBackups || {};
     const paths = Object.keys(pending);
     if (paths.length === 0) return;
@@ -219,8 +258,28 @@ export default function register(api: any) {
     }
 
     st.pendingBackups = pending;
-    saveState(stateFile, st);
+    saveState(config.stateFile, st);
     api.logger?.info?.(`[self-heal] cleaned ${deleted} pending openclaw.json backups (${where})`);
+  }
+
+  function reloadConfig(): boolean {
+    try {
+      const newRaw = (api.pluginConfig ?? {}) as any;
+      if (newRaw.enabled === false) {
+        api.logger?.warn?.("[self-heal] config reload: plugin disabled in new config, ignoring");
+        return false;
+      }
+      const newConfig = parseConfig(newRaw);
+      const changes = configDiff(config, newConfig);
+      if (changes.length === 0) return false;
+
+      api.logger?.info?.(`[self-heal] config reloaded: changed ${changes.join(", ")}`);
+      config = newConfig;
+      return true;
+    } catch (e: any) {
+      api.logger?.warn?.(`[self-heal] config reload failed, keeping current: ${e?.message ?? String(e)}`);
+      return false;
+    }
   }
 
   // Heal after an LLM failure.
@@ -232,28 +291,28 @@ export default function register(api: any) {
     const auth = isAuthScopeLike(err);
     if (!rate && !auth) return;
 
-    const state = loadState(stateFile);
+    const state = loadState(config.stateFile);
     const hitAt = nowSec();
     const extra = auth ? 12 * 60 : 0;
-    const nextAvail = hitAt + (cooldownMinutes + extra) * 60;
+    const nextAvail = hitAt + (config.cooldownMinutes + extra) * 60;
 
     // Best effort: mark the pinned model as limited if we can read it.
     let pinnedModel: string | undefined;
     try {
-      const data = JSON.parse(fs.readFileSync(sessionsFile, "utf-8"));
+      const data = JSON.parse(fs.readFileSync(config.sessionsFile, "utf-8"));
       pinnedModel = ctx?.sessionKey ? data?.[ctx.sessionKey]?.model : undefined;
     } catch {
       pinnedModel = undefined;
     }
 
-    const key = pinnedModel || modelOrder[0];
+    const key = pinnedModel || config.modelOrder[0];
     state.limited[key] = { lastHitAt: hitAt, nextAvailableAt: nextAvail, reason: err?.slice(0, 160) };
-    saveState(stateFile, state);
+    saveState(config.stateFile, state);
 
-    const fallback = pickFallback(modelOrder, state);
+    const fallback = pickFallback(config.modelOrder, state);
 
-    if (patchPins && ctx?.sessionKey && fallback && fallback !== pinnedModel) {
-      patchSessionModel(sessionsFile, ctx.sessionKey, fallback, api.logger);
+    if (config.patchPins && ctx?.sessionKey && fallback && fallback !== pinnedModel) {
+      patchSessionModel(config.sessionsFile, ctx.sessionKey, fallback, api.logger);
     }
   });
 
@@ -263,18 +322,18 @@ export default function register(api: any) {
     if (!content) return;
     if (!isRateLimitLike(content) && !isAuthScopeLike(content)) return;
 
-    const state = loadState(stateFile);
+    const state = loadState(config.stateFile);
     const hitAt = nowSec();
-    state.limited[modelOrder[0]] = {
+    state.limited[config.modelOrder[0]] = {
       lastHitAt: hitAt,
-      nextAvailableAt: hitAt + cooldownMinutes * 60,
+      nextAvailableAt: hitAt + config.cooldownMinutes * 60,
       reason: "outbound error observed",
     };
-    saveState(stateFile, state);
+    saveState(config.stateFile, state);
 
-    const fallback = pickFallback(modelOrder, state);
-    if (patchPins && ctx?.sessionKey) {
-      patchSessionModel(sessionsFile, ctx.sessionKey, fallback, api.logger);
+    const fallback = pickFallback(config.modelOrder, state);
+    if (config.patchPins && ctx?.sessionKey) {
+      patchSessionModel(config.sessionsFile, ctx.sessionKey, fallback, api.logger);
     }
   });
 
@@ -285,10 +344,13 @@ export default function register(api: any) {
       let timer: NodeJS.Timeout | undefined;
 
       const tick = async () => {
-        const state = loadState(stateFile);
+        // Hot-reload: re-read api.pluginConfig to pick up changes
+        reloadConfig();
+
+        const state = loadState(config.stateFile);
 
         // --- WhatsApp disconnect self-heal ---
-        if (whatsappRestartEnabled) {
+        if (config.whatsappRestartEnabled) {
           const st = await runCmd(api, "openclaw channels status --json", 15000);
           if (st.ok) {
             const parsed = safeJsonParse<any>(st.stdout);
@@ -304,8 +366,8 @@ export default function register(api: any) {
               const lastRestartAt = state.whatsapp!.lastRestartAt ?? 0;
               const since = nowSec() - lastRestartAt;
               const shouldRestart =
-                state.whatsapp!.disconnectStreak >= whatsappDisconnectThreshold &&
-                since >= whatsappMinRestartIntervalSec;
+                state.whatsapp!.disconnectStreak >= config.whatsappDisconnectThreshold &&
+                since >= config.whatsappMinRestartIntervalSec;
 
               if (shouldRestart) {
                 api.logger?.warn?.(
@@ -329,7 +391,7 @@ export default function register(api: any) {
         }
 
         // --- Cron failure self-heal ---
-        if (disableFailingCrons) {
+        if (config.disableFailingCrons) {
           const res = await runCmd(api, "openclaw cron list --json", 15000);
           if (res.ok) {
             const parsed = safeJsonParse<any>(res.stdout);
@@ -344,7 +406,7 @@ export default function register(api: any) {
               const prev = state.cron!.failCounts![id] ?? 0;
               state.cron!.failCounts![id] = isFail ? prev + 1 : 0;
 
-              if (isFail && state.cron!.failCounts![id] >= cronFailThreshold) {
+              if (isFail && state.cron!.failCounts![id] >= config.cronFailThreshold) {
                 // Guardrail: do not touch crons if config is invalid
                 const v = isConfigValid();
                 if (!v.ok) {
@@ -359,7 +421,7 @@ export default function register(api: any) {
 
                 // Create issue, but rate limit issue creation
                 const lastIssueAt = state.cron!.lastIssueCreatedAt![id] ?? 0;
-                if (nowSec() - lastIssueAt >= issueCooldownSec) {
+                if (nowSec() - lastIssueAt >= config.issueCooldownSec) {
                   const body = [
                     `Cron job failed repeatedly and was disabled by openclaw-self-healing.`,
                     ``,
@@ -388,7 +450,7 @@ export default function register(api: any) {
         }
 
         // --- Plugin error rollback (disable plugin) ---
-        if (disableFailingPlugins) {
+        if (config.disableFailingPlugins) {
           const res = await runCmd(api, "openclaw plugins list", 15000);
           if (res.ok) {
             // Heuristic: look for lines containing 'error' or 'crash'
@@ -402,7 +464,7 @@ export default function register(api: any) {
           // TODO: when openclaw provides plugins list --json, parse and disable any status=error.
         }
 
-        saveState(stateFile, state);
+        saveState(config.stateFile, state);
       };
 
       // tick every 60s

@@ -56,9 +56,60 @@
       "depends_on": [],
       "blocked_reason": "Waiting for openclaw plugins list --json API",
       "github_issue": 3
+    },
+    "T-006": {
+      "title": "Support configuration hot-reload without gateway restart",
+      "status": "done",
+      "priority": "low",
+      "depends_on": [],
+      "created": "2026-02-28T13:25:43.201Z",
+      "completed": "2026-02-28T14:42:00.000Z",
+      "notes": "Config is now re-read from api.pluginConfig on each monitor tick (every 60s). Changes are validated, diffed, and logged. Invalid new config is rejected (old config kept). Exported parseConfig() and configDiff() for testability. 16 new tests added (68 total).",
+      "github_issue": 8,
+      "github_repo": "elvatis/openclaw-self-healing-homeofe"
+    },
+    "T-007": {
+      "title": "Add active model recovery probing to shorten cooldown periods",
+      "status": "ready",
+      "priority": "medium",
+      "depends_on": [],
+      "created": "2026-02-28T13:25:43.204Z",
+      "notes": "## Summary\n\nModels in cooldown are currently recovered passively: `pickFallback()` checks `nextAvailableAt` only when a new failure occurs. If a model recovers early, the plugin still uses the fallback until the full cooldown expires.\n\n## Scope\n\n- Add a periodic probe (e.g., every 5 minutes) that tests cooldown models\n- Use a lightweight API call (e.g., model info endpoint or small completion)\n- If the model responds successfully, remove it from cooldown early\n- Configurable probe interval and e",
+      "github_issue": 7,
+      "github_repo": "elvatis/openclaw-self-healing-homeofe"
+    },
+    "T-008": {
+      "title": "Add dry-run mode for safe validation of healing logic",
+      "status": "ready",
+      "priority": "medium",
+      "depends_on": [],
+      "created": "2026-02-28T13:25:43.204Z",
+      "notes": "## Summary\n\nThere is no way to test what the plugin would do without it actually taking healing actions (restarting gateways, disabling crons, patching sessions). A dry-run mode is needed for validation and debugging.\n\n## Scope\n\n- Add a `dryRun: boolean` config option (default: false)\n- When enabled: log all actions that _would_ be taken, but do not execute them\n- State tracking still updates (to test state transitions) but side-effects are skipped\n- Useful for: initial setup validation, debuggi",
+      "github_issue": 6,
+      "github_repo": "elvatis/openclaw-self-healing-homeofe"
+    },
+    "T-009": {
+      "title": "Emit structured observability events for heal actions",
+      "status": "ready",
+      "priority": "medium",
+      "depends_on": [],
+      "created": "2026-02-28T13:25:43.204Z",
+      "notes": "## Summary\n\nThe plugin uses `api.logger` for logging but emits no structured events. Monitoring and alerting systems cannot track heal actions, cooldown entries, or failure rates.\n\n## Scope\n\n- Emit structured events via `api.emit()` or equivalent for:\n  - `self-heal:model-cooldown` - model put into cooldown (with model ID, reason, duration)\n  - `self-heal:session-patched` - session model pin overridden (with session key, old/new model)\n  - `self-heal:whatsapp-restart` - WhatsApp gateway restarte",
+      "github_issue": 5,
+      "github_repo": "elvatis/openclaw-self-healing-homeofe"
+    },
+    "T-010": {
+      "title": "Expose self-heal status for external monitoring",
+      "status": "ready",
+      "priority": "medium",
+      "depends_on": [],
+      "created": "2026-02-28T13:25:43.204Z",
+      "notes": "## Summary\n\nExternal tools (dashboards, other plugins, CLI) cannot query the self-heal plugin state. There is no way to know which models are in cooldown, how many heals have occurred, or the current WhatsApp connection status without reading the raw state file.\n\n## Scope\n\n- Register a plugin command or API endpoint (depends on openclaw plugin API):\n  - `openclaw self-heal status` or similar\n  - Returns JSON with: cooldown models, WhatsApp status, cron heal history, last heal actions\n- Alternati",
+      "github_issue": 4,
+      "github_repo": "elvatis/openclaw-self-healing-homeofe"
     }
   },
-  "quick_context": "T-004 done: TypeScript build pipeline added (tsconfig.json, tsc build/typecheck, pretest hook). 52 tests pass with zero type errors. Next: T-005 (plugin health monitoring) is blocked on openclaw plugins list --json API.",
+  "quick_context": "T-006 done: Config hot-reload added - plugin re-reads api.pluginConfig every 60s, validates and diffs changes, logs updates. 68 tests pass, zero type errors. T-005 still blocked on openclaw plugins list --json API.",
   "aahp_version": "3.0",
   "project": "openclaw-self-healing-elvatis",
   "token_budget": {
@@ -67,12 +118,12 @@
     "manifest_plus_core": 300
   },
   "last_session": {
-    "timestamp": "2026-02-27T15:22:00.000Z",
+    "timestamp": "2026-02-28T14:42:00.000Z",
     "phase": "execution",
     "agent": "claude-code",
-    "commit": "0a90b75",
-    "duration_minutes": 3,
-    "session_id": "t004-ts-build-pipeline"
+    "commit": "pending",
+    "duration_minutes": 5,
+    "session_id": "t006-config-hot-reload"
   },
-  "next_task_id": 6
+  "next_task_id": 11
 }

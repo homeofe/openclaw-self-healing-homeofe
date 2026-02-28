@@ -12,7 +12,10 @@ import {
   pickFallback,
   patchSessionModel,
   safeJsonParse,
+  parseConfig,
+  configDiff,
   type State,
+  type PluginConfig,
 } from "../index.js";
 import register from "../index.js";
 
@@ -599,5 +602,337 @@ describe("register", () => {
       const sessions = JSON.parse(fs.readFileSync(sessionsFile, "utf-8"));
       expect(sessions["s1"].model).toBe("fallback");
     });
+  });
+
+  describe("config hot-reload", () => {
+    it("picks up modelOrder changes via api.pluginConfig on monitor tick", async () => {
+      const api = mockApi({
+        pluginConfig: {
+          stateFile,
+          sessionsFile,
+          configFile,
+          modelOrder: ["model-a", "model-b"],
+          cooldownMinutes: 10,
+        },
+      });
+      register(api);
+
+      // Change config before tick
+      api.pluginConfig = {
+        stateFile,
+        sessionsFile,
+        configFile,
+        modelOrder: ["model-x", "model-y", "model-z"],
+        cooldownMinutes: 10,
+      };
+
+      // Run the monitor service tick
+      const svc = api._services[0];
+      await svc.start();
+      // Wait a bit for the immediate tick to run
+      await new Promise((r) => setTimeout(r, 50));
+      await svc.stop();
+
+      // Verify the new model order is used by triggering an agent_end
+      api._emit(
+        "agent_end",
+        { success: false, error: "HTTP 429 rate limit exceeded" },
+        {}
+      );
+
+      const state = loadState(stateFile);
+      // Should mark model-x (new first model), not model-a (old first model)
+      expect(state.limited["model-x"]).toBeDefined();
+      expect(state.limited["model-a"]).toBeUndefined();
+    });
+
+    it("picks up cooldownMinutes changes on monitor tick", async () => {
+      const api = mockApi({
+        pluginConfig: {
+          stateFile,
+          sessionsFile,
+          configFile,
+          modelOrder: ["model-a"],
+          cooldownMinutes: 10,
+        },
+      });
+      register(api);
+
+      // Change cooldown to 60 minutes
+      api.pluginConfig = {
+        stateFile,
+        sessionsFile,
+        configFile,
+        modelOrder: ["model-a"],
+        cooldownMinutes: 60,
+      };
+
+      const svc = api._services[0];
+      await svc.start();
+      await new Promise((r) => setTimeout(r, 50));
+      await svc.stop();
+
+      // Trigger rate limit with new cooldown
+      api._emit(
+        "agent_end",
+        { success: false, error: "rate limit hit" },
+        {}
+      );
+
+      const state = loadState(stateFile);
+      const entry = state.limited["model-a"];
+      // With 60 min cooldown, nextAvailableAt should be ~3600 seconds in the future
+      const minExpected = nowSec() + 60 * 60 - 5;
+      expect(entry.nextAvailableAt).toBeGreaterThanOrEqual(minExpected);
+    });
+
+    it("logs changed config keys on reload", async () => {
+      const api = mockApi({
+        pluginConfig: {
+          stateFile,
+          sessionsFile,
+          configFile,
+          modelOrder: ["model-a"],
+          cooldownMinutes: 10,
+        },
+      });
+      register(api);
+
+      api.pluginConfig = {
+        stateFile,
+        sessionsFile,
+        configFile,
+        modelOrder: ["model-a"],
+        cooldownMinutes: 99,
+      };
+
+      const svc = api._services[0];
+      await svc.start();
+      await new Promise((r) => setTimeout(r, 50));
+      await svc.stop();
+
+      expect(api.logger.info).toHaveBeenCalledWith(
+        expect.stringContaining("config reloaded: changed cooldownMinutes")
+      );
+    });
+
+    it("does not log when config has not changed", async () => {
+      const api = mockApi({
+        pluginConfig: {
+          stateFile,
+          sessionsFile,
+          configFile,
+          modelOrder: ["model-a"],
+          cooldownMinutes: 10,
+        },
+      });
+      register(api);
+
+      // Don't change config
+      const svc = api._services[0];
+      await svc.start();
+      await new Promise((r) => setTimeout(r, 50));
+      await svc.stop();
+
+      // Should not have a "config reloaded" log
+      const reloadCalls = api.logger.info.mock.calls.filter(
+        (c: any[]) => typeof c[0] === "string" && c[0].includes("config reloaded")
+      );
+      expect(reloadCalls).toHaveLength(0);
+    });
+
+    it("ignores config reload when new config sets enabled=false", async () => {
+      const api = mockApi({
+        pluginConfig: {
+          stateFile,
+          sessionsFile,
+          configFile,
+          modelOrder: ["model-a"],
+          cooldownMinutes: 10,
+        },
+      });
+      register(api);
+
+      // Try to disable via hot-reload
+      api.pluginConfig = {
+        enabled: false,
+        stateFile,
+        sessionsFile,
+        configFile,
+        modelOrder: ["model-a"],
+        cooldownMinutes: 10,
+      };
+
+      const svc = api._services[0];
+      await svc.start();
+      await new Promise((r) => setTimeout(r, 50));
+      await svc.stop();
+
+      // Should have logged a warning about ignoring disabled config
+      expect(api.logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("plugin disabled in new config")
+      );
+
+      // Original config should still be active - trigger event with old model
+      api._emit(
+        "agent_end",
+        { success: false, error: "rate limit hit" },
+        {}
+      );
+      const state = loadState(stateFile);
+      expect(state.limited["model-a"]).toBeDefined();
+    });
+
+    it("uses updated config in message_sent handler after reload", async () => {
+      fs.writeFileSync(
+        sessionsFile,
+        JSON.stringify({ "s1": { model: "model-a" } })
+      );
+
+      const api = mockApi({
+        pluginConfig: {
+          stateFile,
+          sessionsFile,
+          configFile,
+          modelOrder: ["model-a", "model-b"],
+          cooldownMinutes: 10,
+        },
+      });
+      register(api);
+
+      // Update model order
+      api.pluginConfig = {
+        stateFile,
+        sessionsFile,
+        configFile,
+        modelOrder: ["model-x", "model-y"],
+        cooldownMinutes: 10,
+      };
+
+      const svc = api._services[0];
+      await svc.start();
+      await new Promise((r) => setTimeout(r, 50));
+      await svc.stop();
+
+      // message_sent should now use new model order
+      api._emit(
+        "message_sent",
+        { content: "429 Too Many Requests" },
+        {}
+      );
+
+      const state = loadState(stateFile);
+      expect(state.limited["model-x"]).toBeDefined();
+      expect(state.limited["model-a"]).toBeUndefined();
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseConfig
+// ---------------------------------------------------------------------------
+
+describe("parseConfig", () => {
+  it("returns defaults for empty input", () => {
+    const c = parseConfig({});
+    expect(c.modelOrder).toEqual([
+      "anthropic/claude-opus-4-6",
+      "openai-codex/gpt-5.2",
+      "google-gemini-cli/gemini-2.5-flash",
+    ]);
+    expect(c.cooldownMinutes).toBe(300);
+    expect(c.patchPins).toBe(true);
+    expect(c.disableFailingCrons).toBe(false);
+    expect(c.disableFailingPlugins).toBe(false);
+    expect(c.whatsappRestartEnabled).toBe(true);
+    expect(c.whatsappDisconnectThreshold).toBe(2);
+    expect(c.whatsappMinRestartIntervalSec).toBe(300);
+    expect(c.cronFailThreshold).toBe(3);
+    expect(c.issueCooldownSec).toBe(6 * 3600);
+    expect(c.pluginDisableCooldownSec).toBe(3600);
+  });
+
+  it("returns defaults for undefined input", () => {
+    const c = parseConfig(undefined);
+    expect(c.cooldownMinutes).toBe(300);
+    expect(c.modelOrder).toHaveLength(3);
+  });
+
+  it("applies custom values", () => {
+    const c = parseConfig({
+      modelOrder: ["a", "b"],
+      cooldownMinutes: 60,
+      autoFix: {
+        patchSessionPins: false,
+        disableFailingCrons: true,
+        cronFailThreshold: 5,
+      },
+    });
+    expect(c.modelOrder).toEqual(["a", "b"]);
+    expect(c.cooldownMinutes).toBe(60);
+    expect(c.patchPins).toBe(false);
+    expect(c.disableFailingCrons).toBe(true);
+    expect(c.cronFailThreshold).toBe(5);
+  });
+
+  it("does not share modelOrder array reference with input", () => {
+    const input = { modelOrder: ["a", "b"] };
+    const c = parseConfig(input);
+    input.modelOrder.push("c");
+    expect(c.modelOrder).toEqual(["a", "b"]);
+  });
+
+  it("expands tilde paths", () => {
+    const c = parseConfig({ stateFile: "~/my-state.json" });
+    expect(c.stateFile).toBe(path.join(os.homedir(), "my-state.json"));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// configDiff
+// ---------------------------------------------------------------------------
+
+describe("configDiff", () => {
+  function defaultConfig(overrides: Partial<PluginConfig> = {}): PluginConfig {
+    return parseConfig(overrides);
+  }
+
+  it("returns empty array for identical configs", () => {
+    const a = defaultConfig();
+    const b = defaultConfig();
+    expect(configDiff(a, b)).toEqual([]);
+  });
+
+  it("detects scalar value changes", () => {
+    const a = defaultConfig();
+    const b = defaultConfig();
+    b.cooldownMinutes = 999;
+    expect(configDiff(a, b)).toEqual(["cooldownMinutes"]);
+  });
+
+  it("detects array value changes", () => {
+    const a = defaultConfig();
+    const b = defaultConfig();
+    b.modelOrder = ["different-model"];
+    expect(configDiff(a, b)).toContain("modelOrder");
+  });
+
+  it("detects boolean changes", () => {
+    const a = defaultConfig();
+    const b = defaultConfig();
+    b.patchPins = !a.patchPins;
+    expect(configDiff(a, b)).toContain("patchPins");
+  });
+
+  it("detects multiple changes", () => {
+    const a = defaultConfig();
+    const b = defaultConfig();
+    b.cooldownMinutes = 1;
+    b.cronFailThreshold = 99;
+    b.whatsappRestartEnabled = !a.whatsappRestartEnabled;
+    const diff = configDiff(a, b);
+    expect(diff).toContain("cooldownMinutes");
+    expect(diff).toContain("cronFailThreshold");
+    expect(diff).toContain("whatsappRestartEnabled");
   });
 });
