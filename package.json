@@ -10,10 +10,11 @@
   },
   "scripts": {
     "build": "tsc",
-    "typecheck": "tsc --noEmit",
-    "pretest": "tsc --noEmit",
+    "typecheck": "tsc -p tsconfig.check.json",
+    "pretest": "tsc -p tsconfig.check.json",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "ci": "npm run typecheck && npm run build && npm run test"
   },
   "devDependencies": {
     "@types/node": "^25.3.2",
