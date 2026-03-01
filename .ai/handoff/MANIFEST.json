@@ -46,7 +46,7 @@
       "status": "done",
       "depends_on": [],
       "github_issue": 2,
-      "completed": "2026-02-27T15:22:00.000Z"
+      "completed": "2026-02-27T15:22:00Z"
     },
     "T-005": {
       "created": "2026-02-27T23:00:00Z",
@@ -55,6 +55,7 @@
       "status": "blocked",
       "depends_on": [],
       "blocked_reason": "Waiting for openclaw plugins list --json API",
+      "github_repo": "elvatis/openclaw-self-healing-homeofe",
       "github_issue": 3
     },
     "T-006": {
