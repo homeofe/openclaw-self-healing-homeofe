@@ -7,6 +7,7 @@ import {
   nowSec,
   loadState,
   saveState,
+  writeStatusFile,
   isRateLimitLike,
   isAuthScopeLike,
   pickFallback,
@@ -2020,6 +2021,18 @@ describe("parseConfig", () => {
     expect(c.stateFile).toBe(path.join(os.homedir(), "my-state.json"));
   });
 
+  it("returns default statusFile path", () => {
+    const c = parseConfig({});
+    expect(c.statusFile).toBe(
+      path.join(os.homedir(), ".openclaw", "workspace", "memory", "self-heal-status.json")
+    );
+  });
+
+  it("applies custom statusFile path", () => {
+    const c = parseConfig({ statusFile: "~/custom-status.json" });
+    expect(c.statusFile).toBe(path.join(os.homedir(), "custom-status.json"));
+  });
+
   it("applies custom probe config", () => {
     const c = parseConfig({ probeEnabled: false, probeIntervalSec: 120 });
     expect(c.probeEnabled).toBe(false);
@@ -2329,6 +2342,7 @@ describe("validateConfig", () => {
       modelOrder: ["anthropic/claude-opus-4-6"],
       cooldownMinutes: 300,
       stateFile: path.join(dir, "state.json"),
+      statusFile: path.join(dir, "status.json"),
       sessionsFile: path.join(dir, "sessions.json"),
       configFile: path.join(dir, "openclaw.json"),
       configBackupsDir: path.join(dir, "backups"),
@@ -2515,5 +2529,154 @@ describe("register() config validation fail-fast", () => {
     expect(api._services).toHaveLength(1);
     expect(api._handlers["agent_end"]).toBeDefined();
     expect(api._handlers["message_sent"]).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// writeStatusFile
+// ---------------------------------------------------------------------------
+
+describe("writeStatusFile", () => {
+  function sampleSnapshot(): StatusSnapshot {
+    return {
+      health: "healthy",
+      activeModel: "anthropic/claude-opus-4-6",
+      models: [
+        { id: "anthropic/claude-opus-4-6", status: "available" },
+      ],
+      whatsapp: {
+        status: "unknown",
+        disconnectStreak: 0,
+        lastRestartAt: null,
+        lastSeenConnectedAt: null,
+      },
+      cron: { trackedJobs: 0, failingJobs: [] },
+      config: {
+        dryRun: false,
+        probeEnabled: true,
+        cooldownMinutes: 300,
+        modelOrder: ["anthropic/claude-opus-4-6"],
+      },
+      generatedAt: 1700000000,
+    };
+  }
+
+  it("writes valid JSON matching the snapshot", () => {
+    const dir = tmpDir();
+    const filePath = path.join(dir, "status.json");
+    const snap = sampleSnapshot();
+
+    writeStatusFile(filePath, snap);
+
+    const content = fs.readFileSync(filePath, "utf-8");
+    const parsed = JSON.parse(content);
+    expect(parsed).toEqual(snap);
+  });
+
+  it("creates parent directories if they do not exist", () => {
+    const dir = tmpDir();
+    const filePath = path.join(dir, "nested", "deep", "status.json");
+
+    writeStatusFile(filePath, sampleSnapshot());
+
+    expect(fs.existsSync(filePath)).toBe(true);
+  });
+
+  it("overwrites existing file on subsequent writes", () => {
+    const dir = tmpDir();
+    const filePath = path.join(dir, "status.json");
+
+    const snap1 = sampleSnapshot();
+    writeStatusFile(filePath, snap1);
+
+    const snap2 = sampleSnapshot();
+    snap2.health = "degraded";
+    snap2.generatedAt = 1700000060;
+    writeStatusFile(filePath, snap2);
+
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    expect(parsed.health).toBe("degraded");
+    expect(parsed.generatedAt).toBe(1700000060);
+  });
+
+  it("does not leave a .tmp file after successful write", () => {
+    const dir = tmpDir();
+    const filePath = path.join(dir, "status.json");
+
+    writeStatusFile(filePath, sampleSnapshot());
+
+    expect(fs.existsSync(filePath + ".tmp")).toBe(false);
+    expect(fs.existsSync(filePath)).toBe(true);
+  });
+
+  it("writes pretty-printed JSON (2-space indent)", () => {
+    const dir = tmpDir();
+    const filePath = path.join(dir, "status.json");
+    const snap = sampleSnapshot();
+
+    writeStatusFile(filePath, snap);
+
+    const content = fs.readFileSync(filePath, "utf-8");
+    expect(content).toBe(JSON.stringify(snap, null, 2));
+  });
+
+  it("monitor tick writes status file", async () => {
+    const dir = tmpDir();
+    const stateFile = path.join(dir, "state.json");
+    const statusFile = path.join(dir, "status.json");
+    const sessionsFile = path.join(dir, "sessions.json");
+    const configFile = path.join(dir, "config.json");
+    const backupsDir = path.join(dir, "backups");
+    fs.writeFileSync(stateFile, JSON.stringify({ limited: {} }));
+    fs.writeFileSync(sessionsFile, "{}");
+    fs.writeFileSync(configFile, "{}");
+
+    const api = mockApi({
+      pluginConfig: { stateFile, statusFile, sessionsFile, configFile, configBackupsDir: backupsDir },
+    });
+    register(api);
+
+    const svc = api._services[0];
+    await svc.start();
+    await svc.stop();
+
+    expect(fs.existsSync(statusFile)).toBe(true);
+    const parsed = JSON.parse(fs.readFileSync(statusFile, "utf-8")) as StatusSnapshot;
+    expect(parsed.health).toBe("healthy");
+    expect(parsed.generatedAt).toBeGreaterThan(0);
+    expect(parsed.activeModel).toBeTruthy();
+    expect(parsed.models).toBeDefined();
+    expect(parsed.whatsapp).toBeDefined();
+    expect(parsed.cron).toBeDefined();
+    expect(parsed.config).toBeDefined();
+  });
+
+  it("logs warning but does not throw when status file write fails", async () => {
+    const dir = tmpDir();
+    const stateFile = path.join(dir, "state.json");
+    // Point statusFile at a path that cannot be created (file used as directory)
+    const blocker = path.join(dir, "blocker");
+    fs.writeFileSync(blocker, "not-a-directory");
+    const statusFile = path.join(blocker, "sub", "status.json");
+    const sessionsFile = path.join(dir, "sessions.json");
+    const configFile = path.join(dir, "config.json");
+    const backupsDir = path.join(dir, "backups");
+    fs.writeFileSync(stateFile, JSON.stringify({ limited: {} }));
+    fs.writeFileSync(sessionsFile, "{}");
+    fs.writeFileSync(configFile, "{}");
+
+    const api = mockApi({
+      pluginConfig: { stateFile, statusFile, sessionsFile, configFile, configBackupsDir: backupsDir },
+    });
+    register(api);
+
+    const svc = api._services[0];
+    // Should not throw
+    await svc.start();
+    await svc.stop();
+
+    // Should have logged a warning about failed status file write
+    const warnCalls = api.logger.warn.mock.calls.map((c: any[]) => c[0]);
+    expect(warnCalls.some((msg: string) => msg.includes("failed to write status file"))).toBe(true);
   });
 });

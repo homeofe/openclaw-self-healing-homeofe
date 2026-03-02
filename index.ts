@@ -128,6 +128,7 @@ export type PluginConfig = {
   modelOrder: string[];
   cooldownMinutes: number;
   stateFile: string;
+  statusFile: string;
   sessionsFile: string;
   configFile: string;
   configBackupsDir: string;
@@ -209,6 +210,7 @@ export function parseConfig(raw: any): PluginConfig {
     modelOrder: cfg.modelOrder?.length ? [...cfg.modelOrder] : [...DEFAULT_MODEL_ORDER],
     cooldownMinutes: cfg.cooldownMinutes ?? 300,
     stateFile: expandHome(cfg.stateFile ?? "~/.openclaw/workspace/memory/self-heal-state.json"),
+    statusFile: expandHome(cfg.statusFile ?? "~/.openclaw/workspace/memory/self-heal-status.json"),
     sessionsFile: expandHome(cfg.sessionsFile ?? "~/.openclaw/agents/main/sessions/sessions.json"),
     configFile: expandHome(cfg.configFile ?? "~/.openclaw/openclaw.json"),
     configBackupsDir: expandHome(cfg.configBackupsDir ?? "~/.openclaw/backups/openclaw.json"),
@@ -303,6 +305,14 @@ export function loadState(p: string): State {
 export function saveState(p: string, s: State) {
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, JSON.stringify(s, null, 2));
+}
+
+export function writeStatusFile(filePath: string, snapshot: StatusSnapshot): void {
+  const dir = path.dirname(filePath);
+  fs.mkdirSync(dir, { recursive: true });
+  const tmp = filePath + ".tmp";
+  fs.writeFileSync(tmp, JSON.stringify(snapshot, null, 2));
+  fs.renameSync(tmp, filePath);
 }
 
 export function isRateLimitLike(err?: string): boolean {
@@ -796,6 +806,13 @@ export default function register(api: any) {
         // Emit status snapshot for external monitoring
         const snapshot = buildStatusSnapshot(state, config);
         api.emit?.("self-heal:status", snapshot);
+
+        // Write status file for external tools / dashboards
+        try {
+          writeStatusFile(config.statusFile, snapshot);
+        } catch (e: any) {
+          api.logger?.warn?.(`[self-heal] failed to write status file: ${e?.message ?? String(e)}`);
+        }
       };
 
       // tick every 60s

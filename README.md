@@ -79,6 +79,29 @@ The plugin validates configuration at startup and refuses to start if any value 
 | `probeIntervalSec` | >= 60 | 300 |
 | `autoFix.whatsappMinRestartIntervalSec` | >= 60 | 300 |
 | `stateFile` | Parent directory must be writable | `~/.openclaw/workspace/memory/self-heal-state.json` |
+| `statusFile` | Path to status snapshot JSON | `~/.openclaw/workspace/memory/self-heal-status.json` |
+
+## Status file
+
+On every monitor tick (60s), the plugin writes a JSON status snapshot to `statusFile`. External scripts, dashboards, or other plugins can poll this file without subscribing to the event bus.
+
+Default path: `~/.openclaw/workspace/memory/self-heal-status.json`
+
+The file is written atomically (write to `.tmp` then rename) to prevent partial reads. The JSON structure matches the `StatusSnapshot` type:
+
+```json
+{
+  "health": "healthy | degraded | healing",
+  "activeModel": "anthropic/claude-opus-4-6",
+  "models": [
+    { "id": "...", "status": "available | cooldown", "cooldownRemainingSec": 1234 }
+  ],
+  "whatsapp": { "status": "connected | disconnected | unknown", "disconnectStreak": 0 },
+  "cron": { "trackedJobs": 2, "failingJobs": [] },
+  "config": { "dryRun": false, "probeEnabled": true, "cooldownMinutes": 300, "modelOrder": ["..."] },
+  "generatedAt": 1700000000
+}
+```
 
 ## Notes
 
