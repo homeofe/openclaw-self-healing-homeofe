@@ -350,7 +350,14 @@ export function patchSessionModel(sessionsFile: string, sessionKey: string, mode
     if (!data[sessionKey]) return false;
     const prev = data[sessionKey].model;
     data[sessionKey].model = model;
-    fs.writeFileSync(sessionsFile, JSON.stringify(data, null, 0));
+    // atomic write: write to tmp file then rename
+    const tmpFile = `${sessionsFile}.tmp.${Date.now()}`;
+    try {
+      fs.writeFileSync(tmpFile, JSON.stringify(data, null, 0), { encoding: "utf-8", mode: 0o600 });
+      fs.renameSync(tmpFile, sessionsFile);
+    } finally {
+      try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch (e) { /* ignore */ }
+    }
     logger?.warn?.(`[self-heal] patched session model: ${sessionKey} ${prev} -> ${model}`);
     return true;
   } catch (e: any) {
