@@ -52,11 +52,12 @@
       "created": "2026-02-27T23:00:00Z",
       "priority": "high",
       "title": "Implement structured plugin health monitoring and auto-disable",
-      "status": "blocked",
+      "status": "done",
       "depends_on": [],
       "blocked_reason": "Waiting for openclaw plugins list --json API",
       "github_repo": "elvatis/openclaw-self-healing-elvatis",
-      "github_issue": 3
+      "github_issue": 3,
+      "completed": "2026-03-07T06:58:52.606Z"
     },
     "T-006": {
       "title": "Support configuration hot-reload without gateway restart",
