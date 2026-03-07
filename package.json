@@ -1,6 +1,6 @@
 {
   "name": "@elvatis_com/openclaw-self-healing-elvatis",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "type": "module",
   "openclaw": {
     "extensions": [

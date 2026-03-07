@@ -618,7 +618,11 @@ export default function register(api: any) {
         if (config.whatsappRestartEnabled) {
           const st = await runCmd(api, "openclaw channels status --json", 15000);
           if (st.ok) {
-            const parsed = safeJsonParse<any>(st.stdout);
+            // openclaw CLI prints plugin startup lines (e.g. "[plugins] [self-heal] enabled...")
+            // to stdout before the JSON payload. Extract the first JSON object to avoid
+            // safeJsonParse returning undefined and falsely treating WA as disconnected.
+            const jsonMatch = st.stdout.match(/\{[\s\S]*\}/);
+            const parsed = jsonMatch ? safeJsonParse<any>(jsonMatch[0]) : undefined;
             const wa = parsed?.channels?.whatsapp;
             const connected = wa?.status === "connected" || wa?.connected === true;
 
@@ -678,7 +682,8 @@ export default function register(api: any) {
         if (config.disableFailingCrons) {
           const res = await runCmd(api, "openclaw cron list --json", 15000);
           if (res.ok) {
-            const parsed = safeJsonParse<any>(res.stdout);
+            const cronJsonMatch = res.stdout.match(/\{[\s\S]*\}/);
+            const parsed = cronJsonMatch ? safeJsonParse<any>(cronJsonMatch[0]) : undefined;
             const jobs: any[] = parsed?.jobs ?? [];
             for (const job of jobs) {
               const id = job.id;
@@ -767,7 +772,8 @@ export default function register(api: any) {
           const res = await runCmd(api, "openclaw plugins list --json", 15000);
           if (res.ok) {
             type PluginEntry = { id: string; name?: string; enabled?: boolean; status?: string; version?: string; error?: string };
-            const parsed = safeJsonParse<{ plugins: PluginEntry[] }>(res.stdout);
+            const pluginJsonMatch = res.stdout.match(/\{[\s\S]*\}/);
+            const parsed = pluginJsonMatch ? safeJsonParse<{ plugins: PluginEntry[] }>(pluginJsonMatch[0]) : undefined;
             const plugins: PluginEntry[] = parsed?.plugins ?? [];
             const selfId = "openclaw-self-healing-elvatis";
 
