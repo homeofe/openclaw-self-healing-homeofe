@@ -1,14 +1,14 @@
 # STATUS.md — openclaw-self-healing-elvatis
 
-_Last updated: 2026-03-07 by Akido (claude-sonnet-4-6)_
+_Last updated: 2026-03-08 by Akido (claude-sonnet-4-6)_
 
-## Current Version: 0.2.8 — STABLE
+## Current Version: 0.2.10 — STABLE
 
 ## What is done
 
 - ✅ Repo: `https://github.com/elvatis/openclaw-self-healing-elvatis`
-- ✅ npm: `@elvatis_com/openclaw-self-healing-elvatis@0.2.8`
-- ✅ ClawHub: `openclaw-self-healing-elvatis@0.2.8`
+- ✅ npm: `@elvatis_com/openclaw-self-healing-elvatis@0.2.10`
+- ✅ ClawHub: `openclaw-self-healing-elvatis@0.2.10`
 - ✅ Model failover: rate-limit + auth-scope cooldown, configurable fallback order
 - ✅ WhatsApp reconnect: disconnect streak detection + gateway restart
 - ✅ Cron failure: consecutive fail threshold → disable + GitHub issue
@@ -18,20 +18,17 @@ _Last updated: 2026-03-07 by Akido (claude-sonnet-4-6)_
 - ✅ Status snapshot: written to file on every tick for external monitoring
 - ✅ Active recovery probing: polls limited models to detect early recovery
 - ✅ Dry-run mode: full behavior simulation without side effects
-- ✅ Config hot-reload: reads `api.pluginConfig` on each tick
-- ✅ Atomic state writes: tmp file + rename to avoid partial writes
-- ✅ 181 tests across 2 suites (unit + integration)
-- ✅ TypeScript build + typecheck pipeline
-- ✅ `.clawhubignore` + rsync-based ClawHub publish documented in CONVENTIONS.md
+- ✅ Backup path: `~/.openclaw/backups/openclaw.json/openclaw.json.<timestamp>.bak`
 
-## Critical Bug Fixed (v0.2.8)
+## Backup Behavior
 
-**Infinite gateway restart loop** — `lastRestartAt` was being saved AFTER
-`openclaw gateway restart`, which kills the process via systemd. On the next
-boot, `lastRestartAt = 0`, bypassing the `whatsappMinRestartIntervalSec`
-rate-limit guard. Fixed by saving state BEFORE the restart call.
+The plugin creates timestamped backups before any action that could restart the gateway
+or change cron/plugin state. Backups are written to:
+`~/.openclaw/backups/openclaw.json/openclaw.json.<ISO-timestamp>.bak`
+
+Note: Files like `openclaw.json.bak` in `~/.openclaw/` are from the manual config-change
+checklist procedure, not from this plugin.
 
 ## Open Risks
 
-- `T-014`: Heal metrics export to JSONL not yet implemented (low priority, no blocker)
-- ClawHub publish via `clawhub publish <dir>` ignores `.clawhubignore` — use rsync workaround (see CONVENTIONS.md)
+- ClawHub publish ignores `.clawhubignore` — use rsync workaround (see CONVENTIONS.md)

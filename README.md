@@ -1,6 +1,6 @@
 ﻿# openclaw-self-healing-elvatis
 
-**Current version: `0.2.8`**
+**Current version: `0.2.10`**
 
 OpenClaw plugin that improves resilience by automatically fixing reversible failures.
 
@@ -12,6 +12,15 @@ OpenClaw plugin that improves resilience by automatically fixing reversible fail
 - **Plugin crashes** — If a plugin reports `status=error` or `status=crash`: auto-disable + GitHub issue
 
 ## Changelog
+
+### v0.2.10 — 2026-03-08
+Docs fix: README and STATUS.md version headers were stuck at 0.2.8 after v0.2.9 bump; SKILL.md missing version footer; add universal release-rule to CONVENTIONS.md.
+
+### v0.2.9 — 2026-03-07
+**Fix: Plugin health monitoring JSON parsing**
+Extract JSON from stdout before parsing — channels subprocess output includes
+non-JSON log lines (e.g. `[INFO] ...`) before the JSON payload, causing parse
+failures in plugin health checks.
 
 ### v0.2.8 — 2026-03-07
 **Fix: Infinite gateway restart loop**
